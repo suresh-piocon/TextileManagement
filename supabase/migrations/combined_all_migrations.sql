@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS company (
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 ALTER TABLE company ENABLE ROW LEVEL SECURITY;
+DROP TRIGGER IF EXISTS update_company_modtime ON company;
 CREATE TRIGGER update_company_modtime BEFORE UPDATE ON company FOR EACH ROW EXECUTE PROCEDURE update_updated_at_column();
 
 CREATE TABLE IF NOT EXISTS app_setting (
@@ -62,6 +63,7 @@ CREATE TABLE IF NOT EXISTS app_setting (
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 ALTER TABLE app_setting ENABLE ROW LEVEL SECURITY;
+DROP TRIGGER IF EXISTS update_app_setting_modtime ON app_setting;
 CREATE TRIGGER update_app_setting_modtime BEFORE UPDATE ON app_setting FOR EACH ROW EXECUTE PROCEDURE update_updated_at_column();
 
 CREATE TABLE IF NOT EXISTS admin (
@@ -74,6 +76,7 @@ CREATE TABLE IF NOT EXISTS admin (
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 ALTER TABLE admin ENABLE ROW LEVEL SECURITY;
+DROP TRIGGER IF EXISTS update_admin_modtime ON admin;
 CREATE TRIGGER update_admin_modtime BEFORE UPDATE ON admin FOR EACH ROW EXECUTE PROCEDURE update_updated_at_column();
 
 INSERT INTO admin (user_name, user_password, user_type, user_status) 
@@ -197,6 +200,7 @@ CREATE TABLE IF NOT EXISTS ledger (
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 ALTER TABLE ledger ENABLE ROW LEVEL SECURITY;
+DROP TRIGGER IF EXISTS update_ledger_modtime ON ledger;
 CREATE TRIGGER update_ledger_modtime BEFORE UPDATE ON ledger FOR EACH ROW EXECUTE PROCEDURE update_updated_at_column();
 
 CREATE INDEX IF NOT EXISTS idx_ledger_frm_code ON ledger(frm_code);
@@ -454,6 +458,7 @@ CREATE TABLE IF NOT EXISTS product_group (
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 ALTER TABLE product_group ENABLE ROW LEVEL SECURITY;
+DROP TRIGGER IF EXISTS update_product_group_modtime ON product_group;
 CREATE TRIGGER update_product_group_modtime BEFORE UPDATE ON product_group FOR EACH ROW EXECUTE PROCEDURE update_updated_at_column();
 
 CREATE TABLE IF NOT EXISTS product (
@@ -481,6 +486,7 @@ CREATE TABLE IF NOT EXISTS product (
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 ALTER TABLE product ENABLE ROW LEVEL SECURITY;
+DROP TRIGGER IF EXISTS update_product_modtime ON product;
 CREATE TRIGGER update_product_modtime BEFORE UPDATE ON product FOR EACH ROW EXECUTE PROCEDURE update_updated_at_column();
 CREATE INDEX IF NOT EXISTS idx_product_frm_code ON product(frm_code);
 CREATE INDEX IF NOT EXISTS idx_product_grp_code ON product(grp_code);
@@ -546,6 +552,7 @@ CREATE TABLE IF NOT EXISTS warp_sheet (
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 ALTER TABLE warp_sheet ENABLE ROW LEVEL SECURITY;
+DROP TRIGGER IF EXISTS update_warp_sheet_modtime ON warp_sheet;
 CREATE TRIGGER update_warp_sheet_modtime BEFORE UPDATE ON warp_sheet FOR EACH ROW EXECUTE PROCEDURE update_updated_at_column();
 
 CREATE TABLE IF NOT EXISTS bar_temp (

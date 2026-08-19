@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS company (
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 ALTER TABLE company ENABLE ROW LEVEL SECURITY;
+DROP TRIGGER IF EXISTS update_company_modtime ON company;
 CREATE TRIGGER update_company_modtime BEFORE UPDATE ON company FOR EACH ROW EXECUTE PROCEDURE update_updated_at_column();
 
 CREATE TABLE IF NOT EXISTS app_setting (
@@ -62,6 +63,7 @@ CREATE TABLE IF NOT EXISTS app_setting (
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 ALTER TABLE app_setting ENABLE ROW LEVEL SECURITY;
+DROP TRIGGER IF EXISTS update_app_setting_modtime ON app_setting;
 CREATE TRIGGER update_app_setting_modtime BEFORE UPDATE ON app_setting FOR EACH ROW EXECUTE PROCEDURE update_updated_at_column();
 
 CREATE TABLE IF NOT EXISTS admin (
@@ -74,6 +76,7 @@ CREATE TABLE IF NOT EXISTS admin (
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 ALTER TABLE admin ENABLE ROW LEVEL SECURITY;
+DROP TRIGGER IF EXISTS update_admin_modtime ON admin;
 CREATE TRIGGER update_admin_modtime BEFORE UPDATE ON admin FOR EACH ROW EXECUTE PROCEDURE update_updated_at_column();
 
 INSERT INTO admin (user_name, user_password, user_type, user_status) 

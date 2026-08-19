@@ -71,6 +71,7 @@ CREATE TABLE IF NOT EXISTS ledger (
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 ALTER TABLE ledger ENABLE ROW LEVEL SECURITY;
+DROP TRIGGER IF EXISTS update_ledger_modtime ON ledger;
 CREATE TRIGGER update_ledger_modtime BEFORE UPDATE ON ledger FOR EACH ROW EXECUTE PROCEDURE update_updated_at_column();
 
 CREATE INDEX IF NOT EXISTS idx_ledger_frm_code ON ledger(frm_code);

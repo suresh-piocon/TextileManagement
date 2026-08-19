@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS product_group (
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 ALTER TABLE product_group ENABLE ROW LEVEL SECURITY;
+DROP TRIGGER IF EXISTS update_product_group_modtime ON product_group;
 CREATE TRIGGER update_product_group_modtime BEFORE UPDATE ON product_group FOR EACH ROW EXECUTE PROCEDURE update_updated_at_column();
 
 CREATE TABLE IF NOT EXISTS product (
@@ -51,6 +52,7 @@ CREATE TABLE IF NOT EXISTS product (
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 ALTER TABLE product ENABLE ROW LEVEL SECURITY;
+DROP TRIGGER IF EXISTS update_product_modtime ON product;
 CREATE TRIGGER update_product_modtime BEFORE UPDATE ON product FOR EACH ROW EXECUTE PROCEDURE update_updated_at_column();
 CREATE INDEX IF NOT EXISTS idx_product_frm_code ON product(frm_code);
 CREATE INDEX IF NOT EXISTS idx_product_grp_code ON product(grp_code);
@@ -116,6 +118,7 @@ CREATE TABLE IF NOT EXISTS warp_sheet (
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 ALTER TABLE warp_sheet ENABLE ROW LEVEL SECURITY;
+DROP TRIGGER IF EXISTS update_warp_sheet_modtime ON warp_sheet;
 CREATE TRIGGER update_warp_sheet_modtime BEFORE UPDATE ON warp_sheet FOR EACH ROW EXECUTE PROCEDURE update_updated_at_column();
 
 CREATE TABLE IF NOT EXISTS bar_temp (
