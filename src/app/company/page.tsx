@@ -29,18 +29,19 @@ export default function CompanyPage() {
   const [fromYear, setFromYear] = useState("");
   const [toYear, setToYear] = useState("");
 
-  const { user, setCompany, setSession } = useApp();
+  const { user, setCompany, setSession, isLoading } = useApp();
   const router = useRouter();
   const supabase = createClient();
 
   useEffect(() => {
+    if (isLoading) return;
     if (!user) {
       router.push("/login");
       return;
     }
     loadCompanies();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user]);
+  }, [user, isLoading]);
 
   const loadCompanies = async () => {
     setLoading(true);
