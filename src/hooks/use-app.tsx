@@ -64,11 +64,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, [user]);
 
   const loadPermissions = async (userId: number) => {
-    const { data } = await supabase
-      .from("user_permission")
-      .select("*")
-      .eq("user_id", userId);
-    if (data) setPermissions(data);
+    try {
+      const { data } = await supabase
+        .from("user_permission")
+        .select("*")
+        .eq("user_id", userId);
+      if (data) setPermissions(data);
+    } catch {
+      // Ignore permission load errors
+    }
   };
 
   const login = async (username: string, password: string) => {
@@ -80,7 +84,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         .eq("user_password", password)
         .maybeSingle();
 
-      if (error || !data) {
+      if (error) {
+        console.error("Supabase query error:", error);
+        return { success: false, error: `DB Error: ${error.message}` };
+      }
+
+      if (!data) {
         return { success: false, error: "Invalid username or password" };
       }
 
@@ -96,17 +105,22 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
       setUser(authUser);
 
-      // Log the login
-      await supabase.from("user_log_info").insert({
-        user_id: authUser.am_ref_no,
-        log_date: new Date().toISOString(),
-        log_in_time: new Date().toLocaleTimeString(),
-        machine_name: navigator.userAgent.substring(0, 100),
-      });
+      // Log the login attempt non-blockingly
+      try {
+        await supabase.from("user_log_info").insert({
+          user_id: authUser.am_ref_no,
+          log_date: new Date().toISOString(),
+          log_in_time: new Date().toLocaleTimeString(),
+          machine_name: navigator.userAgent.substring(0, 100),
+        });
+      } catch (logErr) {
+        console.warn("Could not record login log:", logErr);
+      }
 
       return { success: true };
-    } catch {
-      return { success: false, error: "Login failed. Please try again." };
+    } catch (err: any) {
+      console.error("Login catch error:", err);
+      return { success: false, error: err?.message || "Login failed. Please try again." };
     }
   };
 
