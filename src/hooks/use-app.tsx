@@ -78,7 +78,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         .select("am_ref_no, user_name, user_type, user_status")
         .eq("user_name", username)
         .eq("user_password", password)
-        .single();
+        .maybeSingle();
 
       if (error || !data) {
         return { success: false, error: "Invalid username or password" };
