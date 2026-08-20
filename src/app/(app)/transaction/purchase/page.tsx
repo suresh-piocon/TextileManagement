@@ -1261,13 +1261,13 @@ function PurchaseTransactionContent() {
 
       {/* Bottom Remarks & Action Toolbar Bar */}
       <div className="bg-card border rounded p-3 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2 flex-1 min-w-[320px]">
-          <Label className="text-xs font-bold text-amber-800 dark:text-amber-300">Remarks</Label>
+        <div className="flex items-center gap-2">
+          <Label className="text-xs font-bold">Remarks</Label>
           <Input
             value={remarks}
             onChange={e => setRemarks(e.target.value)}
-            placeholder="Ex BillNo 890/26-27 Date 20-08-26,Qty 6"
-            className={`h-9 text-xs bg-background flex-1 font-mono font-bold border-amber-400 text-foreground ${focusHighlightClass}`}
+            placeholder="Enter bill remarks..."
+            className={`h-8 text-xs bg-background w-72 font-mono ${focusHighlightClass}`}
           />
         </div>
 
