@@ -33,7 +33,7 @@ function BarcodePrintingContent() {
   const [showAllProducts, setShowAllProducts] = useState(false);
   const [search, setSearch] = useState('');
 
-  // Fetch Barcodes & Invoice Details with On-The-Fly Auto Generation fallback
+  // Fetch Barcodes & Invoice Details with Seed Recovery & Auto Generation fallback
   const fetchBarcodes = useCallback(async () => {
     if (!company?.frm_code) return;
     setLoading(true);
@@ -84,26 +84,42 @@ function BarcodePrintingContent() {
             .eq('pm_ref_no', matchingMast.pm_ref_no);
 
           if (childItems && childItems.length > 0) {
-            // Fetch barcode setting sequence
-            const { data: settingData } = await supabase
+            // Fetch barcode setting sequence (without .single() to avoid PGRST116)
+            const { data: settings } = await supabase
               .from('barcode_setting')
               .select('*')
               .or(`frm_code.eq.${company.frm_code},frm_code.is.null`)
-              .order('ref_no', { ascending: true })
-              .limit(1)
-              .single();
+              .order('ref_no', { ascending: true });
 
-            const barRule = settingData || { prefix: 'KS', seed: 2304, seed_len: 5, suffix: '' };
-            let currentSeed = barRule.seed || 2304;
+            const barRule = (settings && settings.length > 0) ? settings[0] : { prefix: 'KS', seed: 2304, seed_len: 5, suffix: '' };
             const prefix = barRule.prefix || 'KS';
             const suffix = barRule.suffix || '';
             const seedLen = barRule.seed_len || 5;
 
+            // Safe Seed Recovery: query existing bar_temp to find highest numerical seed in DB
+            const { data: existingBars } = await supabase
+              .from('bar_temp')
+              .select('bar_no')
+              .eq('frm_code', company.frm_code)
+              .order('bar_ref_id', { ascending: false });
+
+            let maxSeedInDb = (barRule.seed || 2304) - 1;
+            if (existingBars && existingBars.length > 0) {
+              existingBars.forEach(b => {
+                const match = (b.bar_no || '').match(/\d+/);
+                if (match) {
+                  const num = parseInt(match[0]);
+                  if (num > maxSeedInDb) maxSeedInDb = num;
+                }
+              });
+            }
+
+            let currentSeed = Math.max(barRule.seed || 2304, maxSeedInDb + 1);
             const newBarEntries: any[] = [];
 
             childItems.forEach((cItem: any, idx: number) => {
-              const genType = cItem.product?.barcode_gen_type || 'Auto Tracking Batch No';
-              const pRate = cItem.pc_pur_rate || 0;
+              const genType = cItem.product?.barcode_gen_type || 'Auto Tracking Unique No';
+              const pRate = cItem.pc_pur_rate || cItem.pc_txbl_rate || 0;
               const saleRate = cItem.product?.sales_price || pRate;
               const costRate = cItem.pc_txbl_rate || pRate;
               const markup = costRate > 0 && saleRate > costRate ? Number((((saleRate - costRate) / costRate) * 100).toFixed(1)) : 0;
@@ -129,7 +145,7 @@ function BarcodePrintingContent() {
                     markup: markup,
                     margin: margin,
                     print_count: 1,
-                    grp_name: cItem.product?.product_group?.grp_name || '',
+                    grp_name: cItem.product?.product_group?.grp_name || 'PURE SILK',
                     unit_name: cItem.pc_unit || 'NOS'
                   });
                   currentSeed++;
@@ -152,7 +168,7 @@ function BarcodePrintingContent() {
                   markup: markup,
                   margin: margin,
                   print_count: 1,
-                  grp_name: cItem.product?.product_group?.grp_name || '',
+                  grp_name: cItem.product?.product_group?.grp_name || 'PURE SILK',
                   unit_name: cItem.pc_unit || 'NOS'
                 });
                 currentSeed++;
@@ -160,12 +176,20 @@ function BarcodePrintingContent() {
             });
 
             if (newBarEntries.length > 0) {
-              await supabase.from('bar_temp').insert(newBarEntries);
-              if (barRule.ref_no) {
-                await supabase.from('barcode_setting').update({ seed: currentSeed }).eq('ref_no', barRule.ref_no);
+              const { error: insError } = await supabase.from('bar_temp').insert(newBarEntries);
+              if (insError) {
+                console.error("bar_temp insert error:", insError);
               }
 
-              // Re-fetch generated barcodes
+              try {
+                if (barRule.ref_no) {
+                  await supabase.from('barcode_setting').update({ seed: currentSeed }).eq('ref_no', barRule.ref_no);
+                }
+              } catch (e) {
+                console.log("barcode_setting update skipped");
+              }
+
+              // Re-fetch generated barcodes for target invoice
               const { data: refetchedBars } = await supabase
                 .from('bar_temp')
                 .select('*, product(prd_code, prd_name, sales_price, rate, hsn_code, units, product_group(grp_name))')
@@ -436,7 +460,7 @@ function BarcodePrintingContent() {
               ) : filteredRecords.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={19} className="text-center py-8">
-                    No generated barcodes found for Invoice #{selectedInvNo || '130'}.
+                    No generated barcodes found for Invoice #{selectedInvNo || '56'}.
                   </TableCell>
                 </TableRow>
               ) : (

@@ -14,7 +14,18 @@ CREATE TABLE IF NOT EXISTS barcode_setting (
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Enable RLS and add permissive policy for barcode_setting
 ALTER TABLE barcode_setting ENABLE ROW LEVEL SECURITY;
+
+DO $$ 
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies WHERE tablename = 'barcode_setting' AND policyname = 'Allow all on barcode_setting'
+    ) THEN
+        CREATE POLICY "Allow all on barcode_setting" ON barcode_setting FOR ALL USING (true) WITH CHECK (true);
+    END IF;
+END $$;
 
 -- Insert default Barcode Setting rule
 INSERT INTO barcode_setting (bar_name, is_inactive, prefix, suffix, seed_len, seed)

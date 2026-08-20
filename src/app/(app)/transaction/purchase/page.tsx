@@ -461,17 +461,31 @@ function PurchaseTransactionContent() {
       let createdBarcodesCount = 0;
       try {
         const prdCodes = validItems.map(i => i.prd_code).filter(Boolean);
-        const [settingRes, prdRes] = await Promise.all([
-          supabase.from('barcode_setting').select('*').or(`frm_code.eq.${company.frm_code},frm_code.is.null`).order('ref_no', { ascending: true }).limit(1).single(),
+        const [settingRes, prdRes, barRes] = await Promise.all([
+          supabase.from('barcode_setting').select('*').or(`frm_code.eq.${company.frm_code},frm_code.is.null`).order('ref_no', { ascending: true }),
           prdCodes.length > 0 
             ? supabase.from('product').select('ref_no, prd_code, barcode_gen_type, sales_price, rate, product_group(grp_name)').in('ref_no', prdCodes)
-            : { data: [] }
+            : { data: [] },
+          supabase.from('bar_temp').select('bar_no').eq('frm_code', company.frm_code).order('bar_ref_id', { ascending: false })
         ]);
 
-        const barRule = settingRes.data || { prefix: 'KS', seed: 2304, seed_len: 5, suffix: '' };
+        const settingsList = settingRes.data || [];
+        const barRule = settingsList.length > 0 ? settingsList[0] : { prefix: 'KS', seed: 2304, seed_len: 5, suffix: '' };
         const prdMap = new Map((prdRes.data || []).map((p: any) => [p.ref_no, p]));
 
-        let currentSeed = barRule.seed || 2304;
+        // Safe Seed Recovery: find highest numerical seed in DB to guarantee uniqueness
+        let maxSeedInDb = (barRule.seed || 2304) - 1;
+        if (barRes.data && barRes.data.length > 0) {
+          barRes.data.forEach((b: any) => {
+            const match = (b.bar_no || '').match(/\d+/);
+            if (match) {
+              const num = parseInt(match[0]);
+              if (num > maxSeedInDb) maxSeedInDb = num;
+            }
+          });
+        }
+
+        let currentSeed = Math.max(barRule.seed || 2304, maxSeedInDb + 1);
         const prefix = barRule.prefix || 'KS';
         const suffix = barRule.suffix || '';
         const seedLen = barRule.seed_len || 5;
