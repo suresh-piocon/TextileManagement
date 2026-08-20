@@ -20,6 +20,7 @@ interface PurchaseItemRow {
   qty: number;
   unit: string;
   rate: number;
+  sale_rate?: number;
   amount: number;
   disc_perc: number;
   disc_amt: number;
@@ -91,6 +92,24 @@ export default function PurchaseTransactionPage() {
     { exp_name: 'Expenses A/c', amount: 0 },
     { exp_name: 'Freight Charges', amount: 0 }
   ]);
+
+  // Global Keyboard Shortcuts Listener (F3, F4, F10, F11)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'F3') {
+        e.preventDefault();
+        setIsProductModalOpen(true);
+      } else if (e.key === 'F4') {
+        e.preventDefault();
+        handleResetForm();
+      } else if (e.key === 'F11') {
+        e.preventDefault();
+        router.push('/inventory/barcode');
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [router]);
 
   // Fetch initial data
   const fetchData = useCallback(async () => {
@@ -204,6 +223,7 @@ export default function PurchaseTransactionPage() {
       const targetIndex = startIndex + idx;
       const qty = sRow.qty || 1;
       const pRate = sRow.p_rate || product.rate || 0;
+      const saleRate = sRow.sale_rate || product.sales_price || pRate;
       const discPerc = sRow.disc_perc || 0;
       const gstPerc = product.gst_perc || 0;
 
@@ -221,6 +241,7 @@ export default function PurchaseTransactionPage() {
         qty: qty,
         unit: product.units || 'NOS',
         rate: pRate,
+        sale_rate: saleRate,
         amount: Number(baseAmount.toFixed(2)),
         disc_perc: discPerc,
         disc_amt: Number(discAmt.toFixed(2)),
@@ -268,25 +289,6 @@ export default function PurchaseTransactionPage() {
   const rawTotalValue = taxableAmt + totalTaxes + totalOtherExpenses - tdsAmt;
   const netTotalValue = Math.round(rawTotalValue + roundOff);
   const totalQty = items.reduce((sum, item) => sum + (item.qty || 0), 0);
-
-  // Fetch Barcodes generated for current invoice
-  const fetchBarcodesForInvoice = async (invNoToFetch: string) => {
-    if (!company?.frm_code || !invNoToFetch) return;
-    try {
-      const { data } = await supabase
-        .from('bar_temp')
-        .select('*, product(prd_code, prd_name, sales_price)')
-        .eq('frm_code', company.frm_code)
-        .eq('inv_no', invNoToFetch);
-      
-      setGeneratedBarcodes(data || []);
-      if (data && data.length > 0) {
-        setShowBarcodeModal(true);
-      }
-    } catch (e) {
-      console.error(e);
-    }
-  };
 
   // Save Purchase Invoice
   const handleSaveInvoice = async () => {
@@ -410,9 +412,12 @@ export default function PurchaseTransactionPage() {
         validItems.forEach((item, idx) => {
           const prdInfo = prdMap.get(item.prd_code);
           const genType = prdInfo?.barcode_gen_type || 'Auto Tracking Batch No';
+          const saleRate = item.sale_rate || prdInfo?.sales_price || item.rate;
+          const costRate = item.txbl_rate || item.rate;
+          const markup = costRate > 0 && saleRate > costRate ? Number((((saleRate - costRate) / costRate) * 100).toFixed(1)) : 0;
+          const margin = saleRate > 0 ? Number((((saleRate - costRate) / saleRate) * 100).toFixed(2)) : 0;
 
           if (genType === 'Auto Tracking Unique No') {
-            // Generate 1 unique barcode for each unit count (e.g. qty = 30 -> 30 barcodes)
             const unitQty = Math.max(1, Math.floor(item.qty));
             for (let u = 0; u < unitQty; u++) {
               const barNo = `${prefix}${String(currentSeed).padStart(seedLen, '0')}${suffix}`;
@@ -421,7 +426,7 @@ export default function PurchaseTransactionPage() {
                 prcode: item.prd_code || null,
                 grp_code: null,
                 pc_pur_rate: item.rate,
-                pc_sale_rate: prdInfo?.sales_price || item.rate,
+                pc_sale_rate: saleRate,
                 qty: 1,
                 cr_code: parseInt(selectedVendorId),
                 sold_status: 'A',
@@ -429,9 +434,9 @@ export default function PurchaseTransactionPage() {
                 inv_no: invoiceNo || String(refNo),
                 inv_date: invoiceDate,
                 entry_sno: idx + 1,
-                cost_rate: item.txbl_rate,
-                markup: 0,
-                margin: 0,
+                cost_rate: costRate,
+                markup: markup,
+                margin: margin,
                 print_count: 1,
                 grp_name: prdInfo?.product_group?.grp_name || '',
                 unit_name: item.unit
@@ -439,14 +444,13 @@ export default function PurchaseTransactionPage() {
               currentSeed++;
             }
           } else if (genType === 'Auto Tracking Batch No' || genType === 'Auto Tracking Unique No' || !genType) {
-            // Generate 1 batch barcode for the line
             const barNo = `${prefix}${String(currentSeed).padStart(seedLen, '0')}${suffix}`;
             barEntries.push({
               bar_no: barNo,
               prcode: item.prd_code || null,
               grp_code: null,
               pc_pur_rate: item.rate,
-              pc_sale_rate: prdInfo?.sales_price || item.rate,
+              pc_sale_rate: saleRate,
               qty: item.qty,
               cr_code: parseInt(selectedVendorId),
               sold_status: 'A',
@@ -454,9 +458,9 @@ export default function PurchaseTransactionPage() {
               inv_no: invoiceNo || String(refNo),
               inv_date: invoiceDate,
               entry_sno: idx + 1,
-              cost_rate: item.txbl_rate,
-              markup: 0,
-              margin: 0,
+              cost_rate: costRate,
+              markup: markup,
+              margin: margin,
               print_count: 1,
               grp_name: prdInfo?.product_group?.grp_name || '',
               unit_name: item.unit
@@ -543,11 +547,6 @@ export default function PurchaseTransactionPage() {
       } else {
         setOtherExpenses([{ exp_name: 'Expenses A/c', amount: 0 }, { exp_name: 'Freight Charges', amount: 0 }]);
       }
-
-      // Fetch barcodes for invoice if available
-      if (inv.pm_bill_ref_no) {
-        fetchBarcodesForInvoice(inv.pm_bill_ref_no);
-      }
     } catch (e) {
       toast({ title: 'Error loading invoice details', variant: 'destructive' });
     } finally {
@@ -608,7 +607,7 @@ export default function PurchaseTransactionPage() {
             {mode === 'view' ? 'View Mode' : mode === 'edit' ? 'Edit Mode' : 'Add New Mode'}
           </span>
         </div>
-        <div className="text-sm cursor-pointer hover:opacity-80">✕</div>
+        <div className="text-sm cursor-pointer hover:bg-amber-600 px-2 py-0.5 rounded" onClick={() => router.push('/dashboard')}>✕</div>
       </div>
 
       {/* Main Top Header Cards Grid */}
@@ -747,17 +746,17 @@ export default function PurchaseTransactionPage() {
                   <TableHead className="w-8 text-center p-1">Del</TableHead>
                   <TableHead className="w-10 text-center p-1">SNo</TableHead>
                   <TableHead className="p-1 min-w-[180px]">Product Name</TableHead>
-                  <TableHead className="w-16 text-right p-1">Qty</TableHead>
-                  <TableHead className="w-16 p-1">Unit/Per</TableHead>
-                  <TableHead className="w-20 text-right p-1">Rate/Unit</TableHead>
+                  <TableHead className="w-20 min-w-[75px] text-right p-1">Qty</TableHead>
+                  <TableHead className="w-16 min-w-[65px] p-1">Unit/Per</TableHead>
+                  <TableHead className="w-24 min-w-[90px] text-right p-1">Rate/Unit</TableHead>
                   <TableHead className="w-24 text-right p-1">Amount</TableHead>
                   <TableHead className="w-16 text-right p-1">Disc%</TableHead>
                   <TableHead className="w-20 text-right p-1">DiscAmt</TableHead>
                   <TableHead className="w-20 text-right p-1">Expenses</TableHead>
-                  <TableHead className="w-16 text-center p-1">{taxCode === 'INTERSTATE' ? 'IGST %' : 'GST %'}</TableHead>
+                  <TableHead className="w-16 min-w-[65px] text-center p-1">{taxCode === 'INTERSTATE' ? 'IGST %' : 'GST %'}</TableHead>
                   <TableHead className="w-20 text-right p-1">Txbl.Rate</TableHead>
                   <TableHead className="w-20 text-right p-1">Net Rate</TableHead>
-                  <TableHead className="w-20 p-1">HSN_Code</TableHead>
+                  <TableHead className="w-24 min-w-[90px] p-1">HSN_Code</TableHead>
                 </TableRow>
               </TableHeader>
 
@@ -799,27 +798,27 @@ export default function PurchaseTransactionPage() {
                         </Button>
                       </div>
                     </TableCell>
-                    <TableCell className="p-1">
+                    <TableCell className="p-1 min-w-[75px]">
                       <Input
                         type="number"
                         value={row.qty || ''}
                         onChange={e => updateRow(idx, 'qty', e.target.value)}
-                        className="h-7 text-xs text-right font-mono bg-background"
+                        className="h-7 text-xs text-right font-mono font-bold bg-background px-1"
                       />
                     </TableCell>
-                    <TableCell className="p-1">
+                    <TableCell className="p-1 min-w-[65px]">
                       <Input
                         value={row.unit || 'NOS'}
                         onChange={e => updateRow(idx, 'unit', e.target.value)}
-                        className="h-7 text-xs bg-background"
+                        className="h-7 text-xs bg-background px-1"
                       />
                     </TableCell>
-                    <TableCell className="p-1">
+                    <TableCell className="p-1 min-w-[90px]">
                       <Input
                         type="number"
                         value={row.rate || ''}
                         onChange={e => updateRow(idx, 'rate', e.target.value)}
-                        className="h-7 text-xs text-right font-mono bg-background"
+                        className="h-7 text-xs text-right font-mono bg-background px-1"
                       />
                     </TableCell>
                     <TableCell className="text-right font-mono font-bold p-1">
@@ -830,7 +829,7 @@ export default function PurchaseTransactionPage() {
                         type="number"
                         value={row.disc_perc || ''}
                         onChange={e => updateRow(idx, 'disc_perc', e.target.value)}
-                        className="h-7 text-xs text-right font-mono bg-background"
+                        className="h-7 text-xs text-right font-mono bg-background px-1"
                       />
                     </TableCell>
                     <TableCell className="text-right font-mono p-1">
@@ -841,15 +840,15 @@ export default function PurchaseTransactionPage() {
                         type="number"
                         value={row.expenses || ''}
                         onChange={e => updateRow(idx, 'expenses', e.target.value)}
-                        className="h-7 text-xs text-right font-mono bg-background"
+                        className="h-7 text-xs text-right font-mono bg-background px-1"
                       />
                     </TableCell>
-                    <TableCell className="p-1">
+                    <TableCell className="p-1 min-w-[65px]">
                       <Input
                         type="number"
                         value={row.gst_perc || ''}
                         onChange={e => updateRow(idx, 'gst_perc', e.target.value)}
-                        className="h-7 text-xs text-center font-mono bg-background"
+                        className="h-7 text-xs text-center font-mono font-bold bg-background px-1"
                       />
                     </TableCell>
                     <TableCell className="text-right font-mono p-1">
@@ -858,11 +857,11 @@ export default function PurchaseTransactionPage() {
                     <TableCell className="text-right font-mono font-semibold p-1">
                       {(row.net_rate || 0).toFixed(2)}
                     </TableCell>
-                    <TableCell className="p-1">
+                    <TableCell className="p-1 min-w-[90px]">
                       <Input
                         value={row.hsn_code || ''}
                         onChange={e => updateRow(idx, 'hsn_code', e.target.value)}
-                        className="h-7 text-xs font-mono bg-background"
+                        className="h-7 text-xs font-mono bg-background px-1"
                       />
                     </TableCell>
                   </TableRow>
@@ -1039,7 +1038,7 @@ export default function PurchaseTransactionPage() {
             className="h-8 text-xs bg-emerald-600 text-white hover:bg-emerald-700" 
             onClick={() => router.push('/inventory/barcode')}
           >
-            Print Barcodes
+            Print Barcodes [F11]
           </Button>
           <Button size="sm" variant="outline" className="h-8 text-xs text-red-600" onClick={handleResetForm}>
             Cancel
@@ -1107,7 +1106,7 @@ export default function PurchaseTransactionPage() {
                       <TableCell className="font-medium">{b.product?.prd_name || 'Stock Item'}</TableCell>
                       <TableCell className="text-center font-mono font-bold text-emerald-600">{b.qty}</TableCell>
                       <TableCell className="text-right font-mono">₹{(b.pc_pur_rate || 0).toFixed(2)}</TableCell>
-                      <TableCell className="text-right font-mono">₹{(b.pc_sale_rate || 0).toFixed(2)}</TableCell>
+                      <TableCell className="text-right font-mono font-bold text-emerald-700">₹{(b.pc_sale_rate || 0).toFixed(2)}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>

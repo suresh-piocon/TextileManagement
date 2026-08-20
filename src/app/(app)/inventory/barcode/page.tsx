@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import { useApp } from '@/hooks/use-app';
 import { useToast } from '@/components/ui/toast';
@@ -10,6 +11,7 @@ import { Label } from '@/components/ui/label';
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/components/ui/table';
 
 export default function BarcodePrintingPage() {
+  const router = useRouter();
   const { company } = useApp();
   const supabase = createClient();
   const { toast } = useToast();
@@ -20,7 +22,7 @@ export default function BarcodePrintingPage() {
 
   // Filters
   const [barcodeName, setBarcodeName] = useState('2StickerFixedPrice');
-  const [printerName, setPrinterName] = useState('Default Printer');
+  const [printerName, setPrinterName] = useState('Default Thermal Printer');
   const [showAllProducts, setShowAllProducts] = useState(true);
   const [search, setSearch] = useState('');
 
@@ -100,7 +102,7 @@ export default function BarcodePrintingPage() {
           <div className="bg-white text-amber-600 rounded-full w-6 h-6 flex items-center justify-center text-sm font-bold">➜</div>
           <span className="text-xl">Barcode Printing</span>
         </div>
-        <div className="text-sm cursor-pointer hover:opacity-80">✕</div>
+        <div className="text-sm cursor-pointer hover:bg-amber-600 px-2 py-0.5 rounded" onClick={() => router.push('/dashboard')}>✕</div>
       </div>
 
       {/* Top Filter Controls Bar matching Image 1 */}
@@ -121,11 +123,17 @@ export default function BarcodePrintingPage() {
           <div className="flex items-center gap-2">
             <Label className="text-xs font-bold">Printer Name</Label>
             <select
-              className="h-7 rounded border border-input bg-background px-2 text-xs min-w-[180px]"
+              className="h-7 rounded border border-input bg-background px-2 text-xs min-w-[200px]"
               value={printerName}
               onChange={e => setPrinterName(e.target.value)}
             >
-              <option value="Default Printer">Default Thermal Sticker Printer</option>
+              <option value="Default Thermal Printer">Default Thermal Printer</option>
+              <option value="TVS LP 46 Neo">TVS LP 46 Neo</option>
+              <option value="Zebra ZD220 / ZT230">Zebra ZD220 / ZT230</option>
+              <option value="TSC TE244 / TTP-244 Pro">TSC TE244 / TTP-244 Pro</option>
+              <option value="Godex G500">Godex G500</option>
+              <option value="Citizen CL-S621">Citizen CL-S621</option>
+              <option value="Generic / Text Only">Generic / Text Only Printer</option>
             </select>
           </div>
 
@@ -200,10 +208,10 @@ export default function BarcodePrintingPage() {
                   const prdCode = r.product?.prd_code || `S${r.prcode || idx + 1}`;
                   const prdName = r.product?.prd_name || 'Stock Item';
                   const purchaseRate = r.pc_pur_rate || r.product?.rate || 0;
-                  const salesRate = r.pc_sale_rate || r.product?.sales_price || 0;
+                  const salesRate = r.pc_sale_rate || r.product?.sales_price || purchaseRate;
                   const costRate = r.cost_rate || purchaseRate;
-                  const markup = costRate > 0 && salesRate > costRate ? Number((((salesRate - costRate) / costRate) * 100).toFixed(1)) : 0;
-                  const margin = salesRate > 0 ? Number((((salesRate - costRate) / salesRate) * 100).toFixed(2)) : 0;
+                  const markup = r.markup || (costRate > 0 && salesRate > costRate ? Number((((salesRate - costRate) / costRate) * 100).toFixed(1)) : 0);
+                  const margin = r.margin || (salesRate > 0 ? Number((((salesRate - costRate) / salesRate) * 100).toFixed(2)) : 0);
                   const groupName = r.grp_name || r.product?.product_group?.grp_name || 'PURE SILK';
 
                   return (
@@ -224,7 +232,7 @@ export default function BarcodePrintingPage() {
                         {r.print_count || 1}
                       </TableCell>
                       <TableCell className="font-mono p-1">
-                        {r.inv_date ? new Date(r.inv_date).toISOString().split('T')[0] : '17-08-2026'}
+                        {r.inv_date ? new Date(r.inv_date).toISOString().split('T')[0] : '2026-08-20'}
                       </TableCell>
                       <TableCell className="font-mono p-1">{r.inv_no || '-'}</TableCell>
                       <TableCell className="text-center font-mono p-1">{r.entry_sno || 1}</TableCell>
@@ -239,7 +247,7 @@ export default function BarcodePrintingPage() {
                       <TableCell className="text-right font-mono p-1">₹{purchaseRate.toFixed(2)}</TableCell>
                       <TableCell className="text-right font-mono p-1">{markup}%</TableCell>
                       <TableCell className="text-right font-mono p-1">{margin}%</TableCell>
-                      <TableCell className="text-right font-mono font-bold p-1">₹{salesRate.toFixed(2)}</TableCell>
+                      <TableCell className="text-right font-mono font-bold text-emerald-700 dark:text-emerald-400 p-1">₹{salesRate.toFixed(2)}</TableCell>
                     </TableRow>
                   );
                 })
