@@ -35,10 +35,12 @@ export function StockItemModal({ isOpen, product, onClose, onProceed }: StockIte
   useEffect(() => {
     if (isOpen && product) {
       const defaultPRate = product.rate || 0;
-      const defaultSaleRate = product.sales_price || 0;
+      const defaultSaleRate = product.sales_price && product.sales_price > 0 
+        ? product.sales_price 
+        : defaultPRate > 0 ? Number((defaultPRate * 1.25).toFixed(2)) : 0;
       const markup = defaultPRate > 0 && defaultSaleRate > defaultPRate 
         ? Number((((defaultSaleRate - defaultPRate) / defaultPRate) * 100).toFixed(2)) 
-        : 0;
+        : (defaultPRate > 0 ? 25 : 0);
 
       setTargetQty(0);
       setRows([

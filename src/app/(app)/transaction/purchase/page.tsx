@@ -364,7 +364,11 @@ function PurchaseTransactionContent() {
       const targetIndex = startIndex + idx;
       const qty = sRow.qty || 1;
       const pRate = sRow.p_rate || product.rate || 0;
-      const saleRate = sRow.sale_rate || product.sales_price || pRate;
+      const saleRate = sRow.sale_rate && sRow.sale_rate > 0 
+        ? sRow.sale_rate 
+        : product.sales_price && product.sales_price > 0 
+          ? product.sales_price 
+          : Number((pRate * 1.25).toFixed(2));
       const discPerc = sRow.disc_perc || 0;
       const gstPerc = product.gst_perc || 0;
 
@@ -590,7 +594,12 @@ function PurchaseTransactionContent() {
         validItems.forEach((item, idx) => {
           const prdInfo = prdMap.get(item.prd_code);
           const genType = prdInfo?.barcode_gen_type || 'Auto Tracking Unique No';
-          const saleRate = item.sale_rate || prdInfo?.sales_price || item.rate;
+          const saleRate = item.sale_rate && item.sale_rate > 0 
+            ? item.sale_rate 
+            : prdInfo?.sales_price && prdInfo.sales_price > 0 
+              ? prdInfo.sales_price 
+              : Number(((item.rate || 0) * 1.25).toFixed(2));
+
           const costRate = item.txbl_rate || item.rate;
           const markup = costRate > 0 && saleRate > costRate ? Number((((saleRate - costRate) / costRate) * 100).toFixed(1)) : 0;
           const margin = saleRate > 0 ? Number((((saleRate - costRate) / saleRate) * 100).toFixed(2)) : 0;
