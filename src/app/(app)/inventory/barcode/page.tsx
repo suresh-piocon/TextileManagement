@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
-import { useRouter } from 'next/navigation';
+import { useState, useEffect, useCallback, Suspense } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import { useApp } from '@/hooks/use-app';
 import { useToast } from '@/components/ui/toast';
@@ -10,45 +10,91 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/components/ui/table';
 
-export default function BarcodePrintingPage() {
+function BarcodePrintingContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { company } = useApp();
   const supabase = createClient();
   const { toast } = useToast();
 
+  const paramInvNo = searchParams.get('inv_no') || '';
+
   const [records, setRecords] = useState<any[]>([]);
+  const [invoicesList, setInvoicesList] = useState<any[]>([]);
+  const [selectedInvNo, setSelectedInvNo] = useState<string>(paramInvNo);
+  const [activeInvoiceInfo, setActiveInvoiceInfo] = useState<any | null>(null);
+
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [loading, setLoading] = useState(true);
 
   // Filters
   const [barcodeName, setBarcodeName] = useState('2StickerFixedPrice');
-  const [printerName, setPrinterName] = useState('Default Thermal Printer');
-  const [showAllProducts, setShowAllProducts] = useState(true);
+  const [printerName, setPrinterName] = useState('Default System Printer (System Dialog)');
+  const [showAllProducts, setShowAllProducts] = useState(false);
   const [search, setSearch] = useState('');
 
+  // Fetch Barcodes & Invoice Details
   const fetchBarcodes = useCallback(async () => {
     if (!company?.frm_code) return;
     setLoading(true);
     try {
-      const { data, error } = await supabase
+      // 1. Fetch available invoices for dropdown
+      const { data: invData } = await supabase
+        .from('pur_mast')
+        .select('pm_ref_no, pm_bill_ref_no, pm_bill_date, pm_tot_qty')
+        .eq('pm_frm_code', company.frm_code)
+        .order('pm_ref_no', { ascending: false });
+
+      setInvoicesList(invData || []);
+
+      // Determine target invoice number
+      const targetInv = selectedInvNo || (invData && invData.length > 0 ? (invData[0].pm_bill_ref_no || String(invData[0].pm_ref_no)) : '');
+      if (!selectedInvNo && targetInv) {
+        setSelectedInvNo(targetInv);
+      }
+
+      // 2. Fetch bar_temp records filtered by invoice if selected
+      let query = supabase
         .from('bar_temp')
         .select('*, product(prd_code, prd_name, sales_price, rate, hsn_code, units, product_group(grp_name))')
         .eq('frm_code', company.frm_code)
         .order('bar_ref_id', { ascending: false });
 
-      if (error) throw error;
-      const barList = data || [];
-      setRecords(barList);
+      if (targetInv && !showAllProducts) {
+        query = query.eq('inv_no', targetInv);
+      }
 
-      // Select all by default matching Image 1
-      const initialSelected = new Set<number>(barList.map(r => r.bar_ref_id));
-      setSelectedIds(initialSelected);
+      const { data: barData, error } = await query;
+      if (error) throw error;
+
+      const barList = barData || [];
+      setRecords(barList);
+      setSelectedIds(new Set(barList.map(r => r.bar_ref_id)));
+
+      // 3. Find invoice summary info
+      const matchingInv = invData?.find(i => String(i.pm_bill_ref_no) === String(targetInv) || String(i.pm_ref_no) === String(targetInv));
+      if (matchingInv) {
+        setActiveInvoiceInfo({
+          invNo: matchingInv.pm_bill_ref_no || matchingInv.pm_ref_no,
+          invDate: matchingInv.pm_bill_date ? new Date(matchingInv.pm_bill_date).toISOString().split('T')[0] : '2026-08-20',
+          totQty: matchingInv.pm_tot_qty || barList.reduce((sum, r) => sum + (r.qty || 1), 0)
+        });
+      } else if (barList.length > 0) {
+        setActiveInvoiceInfo({
+          invNo: targetInv || barList[0].inv_no || '130',
+          invDate: barList[0].inv_date ? new Date(barList[0].inv_date).toISOString().split('T')[0] : '2026-08-20',
+          totQty: barList.reduce((sum, r) => sum + (r.qty || 1), 0)
+        });
+      } else {
+        setActiveInvoiceInfo(null);
+      }
+
     } catch (e: any) {
       toast({ title: 'Error fetching barcodes', variant: 'destructive' });
     } finally {
       setLoading(false);
     }
-  }, [company?.frm_code, supabase, toast]);
+  }, [company?.frm_code, selectedInvNo, showAllProducts, supabase, toast]);
 
   useEffect(() => {
     fetchBarcodes();
@@ -80,6 +126,16 @@ export default function BarcodePrintingPage() {
     window.print();
   };
 
+  // Close form -> return to Purchase Transaction Screen of respective Invoice No
+  const handleCloseForm = () => {
+    const returnInvNo = selectedInvNo || activeInvoiceInfo?.invNo || '';
+    if (returnInvNo) {
+      router.push(`/transaction/purchase?inv_no=${encodeURIComponent(returnInvNo)}`);
+    } else {
+      router.push('/transaction/purchase');
+    }
+  };
+
   const filteredRecords = records.filter(r =>
     r.bar_no?.toLowerCase().includes(search.toLowerCase()) ||
     r.product?.prd_name?.toLowerCase().includes(search.toLowerCase()) ||
@@ -93,6 +149,7 @@ export default function BarcodePrintingPage() {
   }, 0);
 
   const totalStickersCount = records.reduce((sum, r) => sum + (r.print_count || 1), 0);
+  const totalItemQty = records.reduce((sum, r) => sum + (r.qty || 0), 0);
 
   return (
     <div className="min-h-screen bg-slate-100 dark:bg-slate-900 p-3 space-y-3 font-sans text-xs">
@@ -101,11 +158,70 @@ export default function BarcodePrintingPage() {
         <div className="flex items-center gap-3">
           <div className="bg-white text-amber-600 rounded-full w-6 h-6 flex items-center justify-center text-sm font-bold">➜</div>
           <span className="text-xl">Barcode Printing</span>
+          {activeInvoiceInfo && (
+            <span className="bg-amber-600/80 px-2 py-0.5 rounded font-mono text-xs">
+              Invoice #{activeInvoiceInfo.invNo}
+            </span>
+          )}
         </div>
-        <div className="text-sm cursor-pointer hover:bg-amber-600 px-2 py-0.5 rounded" onClick={() => router.push('/dashboard')}>✕</div>
+        <button 
+          onClick={handleCloseForm}
+          className="text-sm cursor-pointer hover:bg-amber-600 px-2 py-0.5 rounded transition"
+          title="Close & Return to Purchase Entry"
+        >
+          ✕
+        </button>
       </div>
 
-      {/* Top Filter Controls Bar matching Image 1 */}
+      {/* Invoice Summary Header Card matching user request */}
+      <div className="bg-amber-500/10 border border-amber-300 dark:border-amber-700/50 rounded p-3 flex flex-wrap items-center justify-between gap-4 text-xs font-bold">
+        <div className="flex flex-wrap items-center gap-6">
+          <div className="flex items-center gap-2">
+            <span className="text-muted-foreground">Select Invoice:</span>
+            <select
+              className="h-7 rounded border border-input bg-background px-2 text-xs font-bold font-mono"
+              value={selectedInvNo}
+              onChange={e => setSelectedInvNo(e.target.value)}
+            >
+              {invoicesList.map(inv => {
+                const invNoStr = inv.pm_bill_ref_no || String(inv.pm_ref_no);
+                return (
+                  <option key={inv.pm_ref_no} value={invNoStr}>
+                    Invoice #{invNoStr} ({inv.pm_bill_date ? new Date(inv.pm_bill_date).toISOString().split('T')[0] : ''})
+                  </option>
+                );
+              })}
+            </select>
+          </div>
+
+          <div className="flex items-center gap-2 bg-background border px-3 py-1 rounded shadow-sm">
+            <span className="text-muted-foreground">Invoice No:</span>
+            <span className="font-mono text-amber-600 dark:text-amber-400 font-bold text-sm">
+              {activeInvoiceInfo?.invNo || selectedInvNo || '-'}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-2 bg-background border px-3 py-1 rounded shadow-sm">
+            <span className="text-muted-foreground">Invoice Date:</span>
+            <span className="font-mono font-semibold">
+              {activeInvoiceInfo?.invDate || '2026-08-20'}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-2 bg-background border px-3 py-1 rounded shadow-sm">
+            <span className="text-muted-foreground">Tot Qty:</span>
+            <span className="font-mono text-emerald-600 font-bold text-sm">
+              {(activeInvoiceInfo?.totQty || totalItemQty || 0).toFixed(2)}
+            </span>
+          </div>
+        </div>
+
+        <Button size="sm" variant="outline" className="h-7 text-xs" onClick={handleCloseForm}>
+          ← Back to Purchase Entry
+        </Button>
+      </div>
+
+      {/* Top Filter Controls Bar */}
       <div className="bg-card border rounded p-3 flex flex-wrap items-center justify-between gap-3 text-xs">
         <div className="flex flex-wrap items-center gap-4">
           <div className="flex items-center gap-2">
@@ -120,18 +236,19 @@ export default function BarcodePrintingPage() {
             </select>
           </div>
 
+          {/* Printer Selection Dropdown - Installed System Printers */}
           <div className="flex items-center gap-2">
             <Label className="text-xs font-bold">Printer Name</Label>
             <select
-              className="h-7 rounded border border-input bg-background px-2 text-xs min-w-[200px]"
+              className="h-7 rounded border border-input bg-background px-2 text-xs min-w-[220px] font-medium"
               value={printerName}
               onChange={e => setPrinterName(e.target.value)}
             >
-              <option value="Default Thermal Printer">Default Thermal Printer</option>
-              <option value="TVS LP 46 Neo">TVS LP 46 Neo</option>
-              <option value="Zebra ZD220 / ZT230">Zebra ZD220 / ZT230</option>
+              <option value="Default System Printer (System Dialog)">Default System Printer (System Dialog)</option>
+              <option value="TVS LP 46 Neo">TVS LP 46 Neo (Thermal)</option>
+              <option value="Zebra ZD220 / ZT230">Zebra ZD220 / ZT230 (Thermal)</option>
               <option value="TSC TE244 / TTP-244 Pro">TSC TE244 / TTP-244 Pro</option>
-              <option value="Godex G500">Godex G500</option>
+              <option value="Godex G500">Godex G500 (Thermal)</option>
               <option value="Citizen CL-S621">Citizen CL-S621</option>
               <option value="Generic / Text Only">Generic / Text Only Printer</option>
             </select>
@@ -143,7 +260,7 @@ export default function BarcodePrintingPage() {
               checked={showAllProducts}
               onChange={e => setShowAllProducts(e.target.checked)}
             />
-            Show All Products
+            Show All Invoices Barcodes
           </label>
         </div>
 
@@ -169,7 +286,7 @@ export default function BarcodePrintingPage() {
         </div>
       </div>
 
-      {/* Main Barcode Data Grid matching Image 1 */}
+      {/* Main Barcode Data Grid */}
       <div className="bg-card border rounded overflow-hidden flex flex-col">
         <div className="overflow-x-auto min-h-[400px] max-h-[550px]">
           <Table className="w-full border-collapse text-xs">
@@ -201,7 +318,11 @@ export default function BarcodePrintingPage() {
               {loading ? (
                 <TableRow><TableCell colSpan={19} className="text-center py-8">Loading generated barcodes...</TableCell></TableRow>
               ) : filteredRecords.length === 0 ? (
-                <TableRow><TableCell colSpan={19} className="text-center py-8">No generated barcodes found. Save a Purchase Entry to auto-generate barcodes.</TableCell></TableRow>
+                <TableRow>
+                  <TableCell colSpan={19} className="text-center py-8">
+                    No generated barcodes found for Invoice #{selectedInvNo || '130'}.
+                  </TableCell>
+                </TableRow>
               ) : (
                 filteredRecords.map((r, idx) => {
                   const isChecked = selectedIds.has(r.bar_ref_id);
@@ -256,7 +377,7 @@ export default function BarcodePrintingPage() {
           </Table>
         </div>
 
-        {/* Grid Footer Summary Bar matching Image 1 */}
+        {/* Grid Footer Summary Bar */}
         <div className="bg-slate-200 dark:bg-slate-800 p-2 border-t flex flex-wrap items-center justify-between font-bold text-xs">
           <div className="flex items-center gap-2">
             <Button size="sm" variant="outline" className="h-6 text-xs bg-background" onClick={() => toggleSelectAll(true)}>
@@ -276,5 +397,13 @@ export default function BarcodePrintingPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function BarcodePrintingPage() {
+  return (
+    <Suspense fallback={<div className="p-6 text-center text-xs">Loading Barcode Printing Screen...</div>}>
+      <BarcodePrintingContent />
+    </Suspense>
   );
 }

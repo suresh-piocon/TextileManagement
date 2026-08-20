@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
-import { useRouter } from 'next/navigation';
+import { useState, useEffect, useCallback, Suspense } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import { useApp } from '@/hooks/use-app';
 import { useToast } from '@/components/ui/toast';
@@ -37,8 +37,11 @@ interface ExpenseRow {
   amount: number;
 }
 
-export default function PurchaseTransactionPage() {
+function PurchaseTransactionContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const paramInvNo = searchParams.get('inv_no') || '';
+
   const { company } = useApp();
   const supabase = createClient();
   const { toast } = useToast();
@@ -104,12 +107,68 @@ export default function PurchaseTransactionPage() {
         handleResetForm();
       } else if (e.key === 'F11') {
         e.preventDefault();
-        router.push('/inventory/barcode');
+        router.push(`/inventory/barcode?inv_no=${encodeURIComponent(invoiceNo || String(refNo))}`);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [router]);
+  }, [router, invoiceNo, refNo]);
+
+  // Load existing invoice into form
+  const loadInvoiceIntoForm = useCallback(async (inv: any) => {
+    if (!inv) return;
+    setLoading(true);
+    try {
+      setRefNo(inv.pm_rec_no || inv.pm_ref_no);
+      setInvoiceNo(inv.pm_bill_ref_no || '');
+      setBillType(inv.pm_bill_type || 'CREDIT');
+      setEntryDate(inv.pm_entry_date ? new Date(inv.pm_entry_date).toISOString().split('T')[0] : new Date().toISOString().split('T')[0]);
+      setInvoiceDate(inv.pm_bill_date ? new Date(inv.pm_bill_date).toISOString().split('T')[0] : new Date().toISOString().split('T')[0]);
+      setSelectedVendorId(String(inv.pm_cr_code || ''));
+      setTaxCode(inv.pm_tax_model || 'LOCAL');
+      setTaxOnExpenses(inv.pm_tax_on_exp || false);
+      setSalesPerson(inv.pm_sales_person || 'Direct');
+      setRemarks(inv.pm_remarks || '');
+
+      setCashDisc(inv.pm_cash_disc || 0);
+      setSplDisc(inv.pm_spl_disc || 0);
+      setTdsAmt(inv.pm_tds_amt || 0);
+      setRoundOff(inv.pm_rnd_off || 0);
+
+      // Fetch children
+      const { data: childData } = await supabase.from('pur_child').select('*').eq('pm_ref_no', inv.pm_ref_no).order('pc_sno');
+      if (childData && childData.length > 0) {
+        setItems(childData.map((c: any) => ({
+          sno: c.pc_sno || 1,
+          prd_code: c.pc_prcode,
+          prd_name: c.pc_prname || '',
+          qty: c.pc_qty || 0,
+          unit: c.pc_unit || 'NOS',
+          rate: c.pc_pur_rate || 0,
+          amount: c.pc_amount || 0,
+          disc_perc: c.pc_dis_perc || 0,
+          disc_amt: c.pc_disc_amt || 0,
+          expenses: c.pc_expenses || 0,
+          gst_perc: c.pc_gst_perc || 0,
+          txbl_rate: c.pc_txbl_rate || 0,
+          net_rate: c.pc_net_rate || 0,
+          hsn_code: c.pc_hsn_code || ''
+        })));
+      }
+
+      // Fetch expenses
+      const { data: expData } = await supabase.from('pur_expenses').select('*').eq('pm_ref_no', inv.pm_ref_no);
+      if (expData && expData.length > 0) {
+        setOtherExpenses(expData.map((e: any) => ({ exp_name: e.exp_name, amount: e.exp_amount })));
+      } else {
+        setOtherExpenses([{ exp_name: 'Expenses A/c', amount: 0 }, { exp_name: 'Freight Charges', amount: 0 }]);
+      }
+    } catch (e) {
+      toast({ title: 'Error loading invoice details', variant: 'destructive' });
+    } finally {
+      setLoading(false);
+    }
+  }, [supabase, toast]);
 
   // Fetch initial data
   const fetchData = useCallback(async () => {
@@ -130,13 +189,23 @@ export default function PurchaseTransactionPage() {
 
       if (invList.length > 0) {
         setRefNo(invList[0].pm_ref_no + 1);
+
+        // Check if returning with specific invoice number parameter
+        if (paramInvNo) {
+          const targetIndex = invList.findIndex(i => String(i.pm_bill_ref_no) === String(paramInvNo) || String(i.pm_ref_no) === String(paramInvNo));
+          if (targetIndex >= 0) {
+            setCurrentIndex(targetIndex);
+            setMode('view');
+            loadInvoiceIntoForm(invList[targetIndex]);
+          }
+        }
       }
     } catch (e) {
       toast({ title: 'Error loading purchase data', variant: 'destructive' });
     } finally {
       setLoading(false);
     }
-  }, [company?.frm_code, supabase, toast]);
+  }, [company?.frm_code, loadInvoiceIntoForm, paramInvNo, supabase, toast]);
 
   useEffect(() => {
     fetchData();
@@ -498,62 +567,6 @@ export default function PurchaseTransactionPage() {
     }
   };
 
-  // Load existing invoice into form
-  const loadInvoiceIntoForm = useCallback(async (inv: any) => {
-    if (!inv) return;
-    setLoading(true);
-    try {
-      setRefNo(inv.pm_rec_no || inv.pm_ref_no);
-      setInvoiceNo(inv.pm_bill_ref_no || '');
-      setBillType(inv.pm_bill_type || 'CREDIT');
-      setEntryDate(inv.pm_entry_date ? new Date(inv.pm_entry_date).toISOString().split('T')[0] : new Date().toISOString().split('T')[0]);
-      setInvoiceDate(inv.pm_bill_date ? new Date(inv.pm_bill_date).toISOString().split('T')[0] : new Date().toISOString().split('T')[0]);
-      setSelectedVendorId(String(inv.pm_cr_code || ''));
-      setTaxCode(inv.pm_tax_model || 'LOCAL');
-      setTaxOnExpenses(inv.pm_tax_on_exp || false);
-      setSalesPerson(inv.pm_sales_person || 'Direct');
-      setRemarks(inv.pm_remarks || '');
-
-      setCashDisc(inv.pm_cash_disc || 0);
-      setSplDisc(inv.pm_spl_disc || 0);
-      setTdsAmt(inv.pm_tds_amt || 0);
-      setRoundOff(inv.pm_rnd_off || 0);
-
-      // Fetch children
-      const { data: childData } = await supabase.from('pur_child').select('*').eq('pm_ref_no', inv.pm_ref_no).order('pc_sno');
-      if (childData && childData.length > 0) {
-        setItems(childData.map((c: any) => ({
-          sno: c.pc_sno || 1,
-          prd_code: c.pc_prcode,
-          prd_name: c.pc_prname || '',
-          qty: c.pc_qty || 0,
-          unit: c.pc_unit || 'NOS',
-          rate: c.pc_pur_rate || 0,
-          amount: c.pc_amount || 0,
-          disc_perc: c.pc_dis_perc || 0,
-          disc_amt: c.pc_disc_amt || 0,
-          expenses: c.pc_expenses || 0,
-          gst_perc: c.pc_gst_perc || 0,
-          txbl_rate: c.pc_txbl_rate || 0,
-          net_rate: c.pc_net_rate || 0,
-          hsn_code: c.pc_hsn_code || ''
-        })));
-      }
-
-      // Fetch expenses
-      const { data: expData } = await supabase.from('pur_expenses').select('*').eq('pm_ref_no', inv.pm_ref_no);
-      if (expData && expData.length > 0) {
-        setOtherExpenses(expData.map((e: any) => ({ exp_name: e.exp_name, amount: e.exp_amount })));
-      } else {
-        setOtherExpenses([{ exp_name: 'Expenses A/c', amount: 0 }, { exp_name: 'Freight Charges', amount: 0 }]);
-      }
-    } catch (e) {
-      toast({ title: 'Error loading invoice details', variant: 'destructive' });
-    } finally {
-      setLoading(false);
-    }
-  }, [supabase, toast]);
-
   // Reset form to Add New Mode
   const handleResetForm = () => {
     setMode('add');
@@ -624,7 +637,7 @@ export default function PurchaseTransactionPage() {
             <Input 
               value={invoiceNo} 
               onChange={e => setInvoiceNo(e.target.value)} 
-              className="h-6 text-xs bg-background max-w-[120px] font-mono text-right"
+              className="h-6 text-xs bg-background max-w-[120px] font-mono text-right font-bold"
               placeholder="Inv No"
             />
           </div>
@@ -1035,8 +1048,8 @@ export default function PurchaseTransactionPage() {
           <Button 
             size="sm" 
             variant="outline" 
-            className="h-8 text-xs bg-emerald-600 text-white hover:bg-emerald-700" 
-            onClick={() => router.push('/inventory/barcode')}
+            className="h-8 text-xs bg-emerald-600 text-white hover:bg-emerald-700 font-bold" 
+            onClick={() => router.push(`/inventory/barcode?inv_no=${encodeURIComponent(invoiceNo || String(refNo))}`)}
           >
             Print Barcodes [F11]
           </Button>
@@ -1077,10 +1090,10 @@ export default function PurchaseTransactionPage() {
                 </span>
                 <Button 
                   size="sm" 
-                  className="h-7 text-xs bg-amber-600 hover:bg-amber-700 text-white"
+                  className="h-7 text-xs bg-amber-600 hover:bg-amber-700 text-white font-bold"
                   onClick={() => {
                     setShowBarcodeModal(false);
-                    router.push('/inventory/barcode');
+                    router.push(`/inventory/barcode?inv_no=${encodeURIComponent(invoiceNo || String(refNo))}`);
                   }}
                 >
                   Open Barcode Printing Screen →
@@ -1117,10 +1130,14 @@ export default function PurchaseTransactionPage() {
               <Button size="sm" variant="outline" onClick={() => setShowBarcodeModal(false)}>
                 Close
               </Button>
-              <Button size="sm" className="bg-emerald-600 text-white hover:bg-emerald-700" onClick={() => {
-                setShowBarcodeModal(false);
-                router.push('/inventory/barcode');
-              }}>
+              <Button 
+                size="sm" 
+                className="bg-emerald-600 text-white hover:bg-emerald-700 font-bold" 
+                onClick={() => {
+                  setShowBarcodeModal(false);
+                  router.push(`/inventory/barcode?inv_no=${encodeURIComponent(invoiceNo || String(refNo))}`);
+                }}
+              >
                 Go to Barcode Printing Screen
               </Button>
             </div>
@@ -1128,5 +1145,13 @@ export default function PurchaseTransactionPage() {
         </div>
       )}
     </div>
+  );
+}
+
+export default function PurchaseTransactionPage() {
+  return (
+    <Suspense fallback={<div className="p-6 text-center text-xs">Loading Purchase Entry...</div>}>
+      <PurchaseTransactionContent />
+    </Suspense>
   );
 }
