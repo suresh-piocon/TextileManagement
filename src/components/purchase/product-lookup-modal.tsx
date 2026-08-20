@@ -84,7 +84,7 @@ export function ProductLookupModal({ isOpen, onClose, onSelectProduct }: Product
 
   return (
     <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
-      <div className="bg-background w-full max-w-5xl rounded-lg shadow-2xl border overflow-hidden flex flex-col max-h-[90vh]">
+      <div className="bg-background w-full max-w-4xl rounded-lg shadow-2xl border overflow-hidden flex flex-col max-h-[90vh]">
         {/* Title Bar */}
         <div className="bg-amber-500 text-white font-bold px-4 py-2 flex justify-between items-center text-sm">
           <span>Add New Mode - Product Selection</span>
@@ -172,17 +172,15 @@ export function ProductLookupModal({ isOpen, onClose, onSelectProduct }: Product
                 <TableHead className="py-2 text-xs">Product Name</TableHead>
                 <TableHead className="py-2 text-xs">Product Code</TableHead>
                 <TableHead className="py-2 text-xs">Unit</TableHead>
-                <TableHead className="py-2 text-xs text-right">Cost Rate</TableHead>
-                <TableHead className="py-2 text-xs text-right bg-cyan-100 dark:bg-cyan-950 text-cyan-900 dark:text-cyan-100">S-Rate</TableHead>
                 <TableHead className="py-2 text-xs text-center">GST%</TableHead>
                 <TableHead className="py-2 text-xs">HSN Code</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody className="text-xs">
               {loading ? (
-                <TableRow><TableCell colSpan={7} className="text-center py-8">Loading products...</TableCell></TableRow>
+                <TableRow><TableCell colSpan={5} className="text-center py-8">Loading products...</TableCell></TableRow>
               ) : products.length === 0 ? (
-                <TableRow><TableCell colSpan={7} className="text-center py-8">No matching products found</TableCell></TableRow>
+                <TableRow><TableCell colSpan={5} className="text-center py-8">No matching products found</TableCell></TableRow>
               ) : (
                 products.map((p, idx) => {
                   const isSelected = idx === selectedIndex;
@@ -198,13 +196,9 @@ export function ProductLookupModal({ isOpen, onClose, onSelectProduct }: Product
                         isSelected ? 'bg-amber-500 text-white hover:bg-amber-500 font-semibold' : 'hover:bg-muted/50'
                       }`}
                     >
-                      <TableCell className="py-1.5">{p.prd_name}</TableCell>
+                      <TableCell className="py-1.5 font-medium">{p.prd_name}</TableCell>
                       <TableCell className="py-1.5 font-mono">{p.prd_code || '-'}</TableCell>
                       <TableCell className="py-1.5">{p.units || 'NOS'}</TableCell>
-                      <TableCell className="py-1.5 text-right font-mono">₹{(p.rate || 0).toFixed(2)}</TableCell>
-                      <TableCell className={`py-1.5 text-right font-mono ${!isSelected ? 'bg-cyan-50 dark:bg-cyan-950/40 font-bold text-cyan-700 dark:text-cyan-300' : ''}`}>
-                        ₹{(p.sales_price || 0).toFixed(2)}
-                      </TableCell>
                       <TableCell className="py-1.5 text-center font-mono">{p.gst_perc || 0}%</TableCell>
                       <TableCell className="py-1.5 font-mono">{p.hsn_code || '-'}</TableCell>
                     </TableRow>
@@ -218,7 +212,7 @@ export function ProductLookupModal({ isOpen, onClose, onSelectProduct }: Product
         {/* Footer Bar */}
         <div className="bg-muted/40 p-2 border-t text-xs flex justify-between items-center text-muted-foreground">
           <div>
-            Double click or press <kbd className="px-1 border rounded bg-background">Select [F5]</kbd> to insert item into invoice.
+            Double click or press <kbd className="px-1 border rounded bg-background font-mono">Select [F5]</kbd> to enter stock item details.
           </div>
           <div>Total Products: {products.length}</div>
         </div>

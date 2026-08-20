@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/components/ui/table';
 import { ProductLookupModal } from '@/components/purchase/product-lookup-modal';
+import { StockItemModal, StockDetailRow } from '@/components/purchase/stock-item-modal';
 import { INDIAN_STATES } from '@/lib/constants';
 
 interface PurchaseItemRow {
@@ -48,8 +49,10 @@ export default function PurchaseTransactionPage() {
   const [vendors, setVendors] = useState<any[]>([]);
   const [expenseLedgers, setExpenseLedgers] = useState<any[]>([]);
 
-  // Modal State
+  // 2-Step Modal State
   const [isProductModalOpen, setIsProductModalOpen] = useState(false);
+  const [isStockModalOpen, setIsStockModalOpen] = useState(false);
+  const [selectedProductForStock, setSelectedProductForStock] = useState<any | null>(null);
   const [activeRowIndex, setActiveRowIndex] = useState<number | null>(null);
 
   // Form Header State
@@ -177,36 +180,69 @@ export default function PurchaseTransactionPage() {
     setItems(updated);
   };
 
-  // Handle product selected from lookup modal
-  const handleSelectProductFromModal = (product: any) => {
-    if (activeRowIndex === null) return;
-    const updated = [...items];
-    const row = { ...updated[activeRowIndex] };
+  // Step 1: Product selected from Product Lookup Modal -> Open Stock Item Details Modal
+  const handleSelectProductFromLookup = (product: any) => {
+    setSelectedProductForStock(product);
+    setIsProductModalOpen(false);
+    setIsStockModalOpen(true);
+  };
 
-    row.prd_code = product.ref_no;
-    row.prd_name = product.prd_name;
-    row.unit = product.units || 'NOS';
-    row.rate = product.rate || 0;
-    row.gst_perc = product.gst_perc || 0;
-    row.hsn_code = product.hsn_code || '';
+  // Step 2: Proceed from Stock Item Details Modal -> Populate transaction grid
+  const handleProceedStockItems = (product: any, stockRows: StockDetailRow[]) => {
+    if (stockRows.length === 0 || activeRowIndex === null) return;
 
-    // Calculate initial amounts
-    const qty = row.qty || 1;
-    row.qty = qty;
-    row.amount = qty * row.rate;
-    row.txbl_rate = row.rate;
-    row.net_rate = Number((row.rate + (row.rate * row.gst_perc) / 100).toFixed(2));
+    let updated = [...items];
+    const startIndex = activeRowIndex;
 
-    updated[activeRowIndex] = row;
-    setItems(updated);
+    stockRows.forEach((sRow, idx) => {
+      const targetIndex = startIndex + idx;
+      const qty = sRow.qty || 1;
+      const pRate = sRow.p_rate || product.rate || 0;
+      const discPerc = sRow.disc_perc || 0;
+      const gstPerc = product.gst_perc || 0;
 
-    // If it's the last row, automatically append a new empty row for quick data entry
-    if (activeRowIndex === items.length - 1) {
+      const baseAmount = qty * pRate;
+      const discAmt = (baseAmount * discPerc) / 100;
+      const netBaseAmount = baseAmount - discAmt;
+      const txblRate = qty > 0 ? netBaseAmount / qty : 0;
+      const taxPerUnit = (txblRate * gstPerc) / 100;
+      const netRate = txblRate + taxPerUnit;
+
+      const newRow: PurchaseItemRow = {
+        sno: targetIndex + 1,
+        prd_code: product.ref_no,
+        prd_name: product.prd_name,
+        qty: qty,
+        unit: product.units || 'NOS',
+        rate: pRate,
+        amount: Number(baseAmount.toFixed(2)),
+        disc_perc: discPerc,
+        disc_amt: Number(discAmt.toFixed(2)),
+        expenses: 0,
+        gst_perc: gstPerc,
+        txbl_rate: Number(txblRate.toFixed(2)),
+        net_rate: Number(netRate.toFixed(2)),
+        hsn_code: product.hsn_code || ''
+      };
+
+      if (targetIndex < updated.length) {
+        updated[targetIndex] = newRow;
+      } else {
+        updated.push(newRow);
+      }
+    });
+
+    // Re-index serial numbers
+    updated = updated.map((r, i) => ({ ...r, sno: i + 1 }));
+
+    // Append an empty row at the end if the last row is filled
+    if (updated[updated.length - 1].prd_name) {
       updated.push({
         sno: updated.length + 1, prd_name: '', qty: 0, unit: 'NOS', rate: 0, amount: 0, disc_perc: 0, disc_amt: 0, expenses: 0, gst_perc: 0, txbl_rate: 0, net_rate: 0, hsn_code: ''
       });
-      setItems(updated);
     }
+
+    setItems(updated);
   };
 
   // Summaries calculation
@@ -875,11 +911,19 @@ export default function PurchaseTransactionPage() {
         </div>
       </div>
 
-      {/* Product Search Lookup Modal */}
+      {/* Step 1: Product Search Lookup Modal */}
       <ProductLookupModal
         isOpen={isProductModalOpen}
         onClose={() => setIsProductModalOpen(false)}
-        onSelectProduct={handleSelectProductFromModal}
+        onSelectProduct={handleSelectProductFromLookup}
+      />
+
+      {/* Step 2: Stock Item Details Entry Modal */}
+      <StockItemModal
+        isOpen={isStockModalOpen}
+        product={selectedProductForStock}
+        onClose={() => setIsStockModalOpen(false)}
+        onProceed={handleProceedStockItems}
       />
     </div>
   );
