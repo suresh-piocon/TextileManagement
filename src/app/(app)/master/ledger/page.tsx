@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/components/ui/table';
+import { INDIAN_STATES } from '@/lib/constants';
 
 export default function LedgerPage() {
   const { company } = useApp();
@@ -45,6 +46,27 @@ export default function LedgerPage() {
   useEffect(() => {
     fetchRecords();
   }, [fetchRecords]);
+
+  const handleStateChange = (selectedStateName: string) => {
+    const stateObj = INDIAN_STATES.find(s => s.name === selectedStateName);
+    const stateCode = stateObj ? stateObj.code : '';
+    
+    // Determine company state code
+    const compStCode = company?.st_code || INDIAN_STATES.find(s => s.name.toLowerCase() === company?.state?.toLowerCase())?.code || '';
+    
+    // Auto-select registration type: 50 (IntraState) if state matches company state, else 51 (InterState)
+    const regNo = (stateCode && compStCode && stateCode === compStCode) ? '50' : (stateCode ? '51' : (formData.reg_no || '50'));
+
+    setFormData((prev: any) => ({
+      ...prev,
+      state: selectedStateName,
+      state_code: stateCode,
+      reg_no: regNo
+    }));
+  };
+
+  const selectedGroup = groups.find(g => String(g.grp_id) === String(formData.grp_id));
+  const isSundryCreditors = selectedGroup?.grp_name?.toLowerCase().includes('sundry creditors') || Number(formData.grp_id) === 65;
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -129,8 +151,16 @@ export default function LedgerPage() {
             {/* Address */}
             <div className="col-span-3 font-semibold border-b pb-2 mt-2">Address</div>
             <div>
-              <Label>Street</Label>
-              <Input value={formData.street || ''} onChange={e => setFormData({...formData, street: e.target.value})} />
+              <Label>Address 1</Label>
+              <Input value={formData.add1 || ''} onChange={e => setFormData({...formData, add1: e.target.value})} />
+            </div>
+            <div>
+              <Label>Address 2</Label>
+              <Input value={formData.add2 || ''} onChange={e => setFormData({...formData, add2: e.target.value})} />
+            </div>
+            <div>
+              <Label>Address 3</Label>
+              <Input value={formData.add3 || ''} onChange={e => setFormData({...formData, add3: e.target.value})} />
             </div>
             <div>
               <Label>City</Label>
@@ -142,7 +172,22 @@ export default function LedgerPage() {
             </div>
             <div>
               <Label>State</Label>
-              <Input value={formData.state || ''} onChange={e => setFormData({...formData, state: e.target.value})} />
+              <select 
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm" 
+                value={formData.state || ''} 
+                onChange={e => handleStateChange(e.target.value)}
+              >
+                <option value="">Select State</option>
+                {INDIAN_STATES.map(s => (
+                  <option key={s.code} value={s.name}>
+                    {s.name} ({s.code})
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <Label>State Code (GST)</Label>
+              <Input value={formData.state_code || ''} readOnly className="bg-muted font-mono" placeholder="Auto-filled" />
             </div>
 
             {/* Tax Info */}
@@ -153,7 +198,7 @@ export default function LedgerPage() {
             </div>
             <div>
               <Label>Registration Type</Label>
-              <select className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm" value={formData.reg_no || '50'} onChange={e => setFormData({...formData, reg_no: e.target.value})}>
+              <select className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm" value={String(formData.reg_no || '50')} onChange={e => setFormData({...formData, reg_no: e.target.value})}>
                 <option value="50">50 - IntraState</option>
                 <option value="51">51 - InterState</option>
               </select>
@@ -165,6 +210,14 @@ export default function LedgerPage() {
 
             {/* Contact */}
             <div className="col-span-3 font-semibold border-b pb-2 mt-2">Contact & Account</div>
+            <div>
+              <Label>Cell No 1</Label>
+              <Input value={formData.cell_no1 || ''} onChange={e => setFormData({...formData, cell_no1: e.target.value})} />
+            </div>
+            <div>
+              <Label>Cell No 2</Label>
+              <Input value={formData.cell_no2 || ''} onChange={e => setFormData({...formData, cell_no2: e.target.value})} />
+            </div>
             <div>
               <Label>Phone No</Label>
               <Input value={formData.ph_no || ''} onChange={e => setFormData({...formData, ph_no: e.target.value})} />
@@ -183,6 +236,33 @@ export default function LedgerPage() {
                 </select>
               </div>
             </div>
+
+            {/* Bank Details for Sundry Creditors */}
+            {isSundryCreditors && (
+              <>
+                <div className="col-span-3 font-semibold border-b pb-2 mt-2 text-primary">Bank Account Details (Sundry Creditors)</div>
+                <div>
+                  <Label>A/C No</Label>
+                  <Input value={formData.bank_acc_no || ''} onChange={e => setFormData({...formData, bank_acc_no: e.target.value})} placeholder="Account Number" />
+                </div>
+                <div>
+                  <Label>A/C Name</Label>
+                  <Input value={formData.bank_acc_name || ''} onChange={e => setFormData({...formData, bank_acc_name: e.target.value})} placeholder="Account Holder Name" />
+                </div>
+                <div>
+                  <Label>IFSC Code</Label>
+                  <Input value={formData.bank_ifsc || ''} onChange={e => setFormData({...formData, bank_ifsc: e.target.value})} placeholder="IFSC Code" />
+                </div>
+                <div>
+                  <Label>Bank Name</Label>
+                  <Input value={formData.bank_name || ''} onChange={e => setFormData({...formData, bank_name: e.target.value})} placeholder="Bank Name" />
+                </div>
+                <div>
+                  <Label>Branch</Label>
+                  <Input value={formData.bank_branch || ''} onChange={e => setFormData({...formData, bank_branch: e.target.value})} placeholder="Branch Name" />
+                </div>
+              </>
+            )}
             
             <div className="col-span-3 pt-4">
               <Button type="submit">Save Ledger</Button>
@@ -200,14 +280,16 @@ export default function LedgerPage() {
         />
       </div>
 
-      <div className="border rounded-md">
+      <div className="border rounded-md overflow-x-auto">
         <Table>
           <TableHeader>
             <TableRow>
               <TableHead>Code</TableHead>
               <TableHead>Name</TableHead>
               <TableHead>Group</TableHead>
-              <TableHead>City</TableHead>
+              <TableHead>State</TableHead>
+              <TableHead>State Code</TableHead>
+              <TableHead>Cell No 1</TableHead>
               <TableHead>GSTIN</TableHead>
               <TableHead>Op. Bal</TableHead>
               <TableHead className="text-right">Actions</TableHead>
@@ -215,16 +297,18 @@ export default function LedgerPage() {
           </TableHeader>
           <TableBody>
             {loading ? (
-              <TableRow><TableCell colSpan={7} className="text-center">Loading...</TableCell></TableRow>
+              <TableRow><TableCell colSpan={9} className="text-center">Loading...</TableCell></TableRow>
             ) : filteredRecords.length === 0 ? (
-              <TableRow><TableCell colSpan={7} className="text-center">No records found</TableCell></TableRow>
+              <TableRow><TableCell colSpan={9} className="text-center">No records found</TableCell></TableRow>
             ) : (
               filteredRecords.map(record => (
                 <TableRow key={record.ledg_code}>
                   <TableCell>{record.ledg_code}</TableCell>
                   <TableCell>{record.ledg_name}</TableCell>
                   <TableCell>{record.group_master?.grp_name}</TableCell>
-                  <TableCell>{record.city}</TableCell>
+                  <TableCell>{record.state}</TableCell>
+                  <TableCell>{record.state_code}</TableCell>
+                  <TableCell>{record.cell_no1 || record.cell_no}</TableCell>
                   <TableCell>{record.gstin}</TableCell>
                   <TableCell>{record.op_bal} {record.op_bal_type}</TableCell>
                   <TableCell className="text-right space-x-2">

@@ -119,21 +119,6 @@ export default function ProductGroupPage() {
               />
             </div>
             <div>
-              <Label>HSN Code</Label>
-              <Input 
-                value={formData.hsn_code || ''} 
-                onChange={e => setFormData({...formData, hsn_code: e.target.value})} 
-              />
-            </div>
-            <div>
-              <Label>GST %</Label>
-              <Input 
-                type="number"
-                value={formData.gst_perc || 0} 
-                onChange={e => setFormData({...formData, gst_perc: parseFloat(e.target.value)})} 
-              />
-            </div>
-            <div>
               <Label>Status</Label>
               <select 
                 className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
@@ -166,24 +151,20 @@ export default function ProductGroupPage() {
             <TableRow>
               <TableHead>Code</TableHead>
               <TableHead>Name</TableHead>
-              <TableHead>HSN</TableHead>
-              <TableHead>GST %</TableHead>
               <TableHead>Status</TableHead>
               <TableHead className="text-right">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {loading ? (
-              <TableRow><TableCell colSpan={6} className="text-center">Loading...</TableCell></TableRow>
+              <TableRow><TableCell colSpan={4} className="text-center">Loading...</TableCell></TableRow>
             ) : filteredRecords.length === 0 ? (
-              <TableRow><TableCell colSpan={6} className="text-center">No records found</TableCell></TableRow>
+              <TableRow><TableCell colSpan={4} className="text-center">No records found</TableCell></TableRow>
             ) : (
               filteredRecords.map(record => (
                 <TableRow key={record.ref_no}>
                   <TableCell>{record.grp_code}</TableCell>
                   <TableCell>{record.grp_name}</TableCell>
-                  <TableCell>{record.hsn_code}</TableCell>
-                  <TableCell>{record.gst_perc}</TableCell>
                   <TableCell>{record.status}</TableCell>
                   <TableCell className="text-right space-x-2">
                     <Button variant="outline" size="sm" onClick={() => { setFormData(record); setShowForm(true); }}>Edit</Button>
