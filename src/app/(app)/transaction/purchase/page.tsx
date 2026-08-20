@@ -96,24 +96,6 @@ function PurchaseTransactionContent() {
     { exp_name: 'Freight Charges', amount: 0 }
   ]);
 
-  // Global Keyboard Shortcuts Listener (F3, F4, F10, F11)
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'F3') {
-        e.preventDefault();
-        setIsProductModalOpen(true);
-      } else if (e.key === 'F4') {
-        e.preventDefault();
-        handleResetForm();
-      } else if (e.key === 'F11') {
-        e.preventDefault();
-        router.push(`/inventory/barcode?inv_no=${encodeURIComponent(invoiceNo || String(refNo))}`);
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [router, invoiceNo, refNo]);
-
   // Load existing invoice into form
   const loadInvoiceIntoForm = useCallback(async (inv: any) => {
     if (!inv) return;
@@ -169,6 +151,96 @@ function PurchaseTransactionContent() {
       setLoading(false);
     }
   }, [supabase, toast]);
+
+  // Reset form to Add New Mode
+  const handleResetForm = () => {
+    setMode('add');
+    setCurrentIndex(-1);
+    setInvoiceNo('');
+    setSelectedVendorId('');
+    setTaxCode('LOCAL');
+    setTaxOnExpenses(false);
+    setSalesPerson('Direct');
+    setRemarks('');
+    setCashDisc(0);
+    setSplDisc(0);
+    setTdsAmt(0);
+    setRoundOff(0);
+    setItems([{ sno: 1, prd_name: '', qty: 0, unit: 'NOS', rate: 0, amount: 0, disc_perc: 0, disc_amt: 0, expenses: 0, gst_perc: 0, txbl_rate: 0, net_rate: 0, hsn_code: '' }]);
+    setOtherExpenses([{ exp_name: 'Expenses A/c', amount: 0 }, { exp_name: 'Freight Charges', amount: 0 }]);
+    setGeneratedBarcodes([]);
+    setShowBarcodeModal(false);
+    
+    if (invoices.length > 0) {
+      setRefNo(invoices[0].pm_ref_no + 1);
+    }
+  };
+
+  // Delete Purchase Invoice and all generated barcodes for this invoice
+  const handleDeleteInvoice = async () => {
+    if (currentIndex < 0 || !invoices[currentIndex]) {
+      toast({ title: 'Please select an existing invoice to delete', variant: 'destructive' });
+      return;
+    }
+
+    const targetInv = invoices[currentIndex];
+    const targetInvNo = targetInv.pm_bill_ref_no || String(targetInv.pm_ref_no);
+
+    if (!confirm(`Are you sure you want to DELETE Purchase Invoice #${targetInvNo}?\nThis will permanently delete the transaction entry and all associated generated barcodes.`)) {
+      return;
+    }
+
+    try {
+      setLoading(true);
+
+      // 1. Delete barcodes from bar_temp
+      if (company?.frm_code) {
+        await supabase
+          .from('bar_temp')
+          .delete()
+          .eq('frm_code', company.frm_code)
+          .eq('inv_no', targetInvNo);
+      }
+
+      // 2. Delete pur_mast (cascades to pur_child & pur_expenses)
+      const { error } = await supabase.from('pur_mast').delete().eq('pm_ref_no', targetInv.pm_ref_no);
+      if (error) throw error;
+
+      toast({ 
+        title: `Purchase Invoice #${targetInvNo} Deleted Successfully`, 
+        description: 'Transaction entry and barcodes deleted.',
+        variant: 'success' 
+      });
+
+      fetchData();
+      handleResetForm();
+    } catch (e: any) {
+      toast({ title: 'Error deleting invoice', description: e.message, variant: 'destructive' });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Global Keyboard Shortcuts Listener (F3, F4, F8, F10, F11)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'F3') {
+        e.preventDefault();
+        setIsProductModalOpen(true);
+      } else if (e.key === 'F4') {
+        e.preventDefault();
+        handleResetForm();
+      } else if (e.key === 'F8') {
+        e.preventDefault();
+        handleDeleteInvoice();
+      } else if (e.key === 'F11') {
+        e.preventDefault();
+        router.push(`/inventory/barcode?inv_no=${encodeURIComponent(invoiceNo || String(refNo))}`);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [router, invoiceNo, refNo, currentIndex, invoices]);
 
   // Fetch initial data
   const fetchData = useCallback(async () => {
@@ -359,7 +431,7 @@ function PurchaseTransactionContent() {
   const netTotalValue = Math.round(rawTotalValue + roundOff);
   const totalQty = items.reduce((sum, item) => sum + (item.qty || 0), 0);
 
-  // Save Purchase Invoice
+  // Save Purchase Invoice with Duplicate Protection & Clean Re-Insertion
   const handleSaveInvoice = async () => {
     if (!company?.frm_code) return;
     if (!selectedVendorId) {
@@ -374,6 +446,27 @@ function PurchaseTransactionContent() {
 
     try {
       setLoading(true);
+
+      // 1. AVOID DUPLICATE INVOICE ENTRY IN ADD MODE (Same Invoice No + Date + Vendor + Financial Year)
+      if (mode === 'add') {
+        const { data: dupCheck } = await supabase
+          .from('pur_mast')
+          .select('pm_ref_no')
+          .eq('pm_frm_code', company.frm_code)
+          .eq('pm_cr_code', parseInt(selectedVendorId))
+          .eq('pm_bill_ref_no', invoiceNo)
+          .eq('pm_bill_date', invoiceDate);
+
+        if (dupCheck && dupCheck.length > 0) {
+          toast({
+            title: 'Duplicate Invoice Entry Blocked!',
+            description: `Invoice No #${invoiceNo} dated ${invoiceDate} for this vendor already exists in this financial year.`,
+            variant: 'destructive'
+          });
+          setLoading(false);
+          return;
+        }
+      }
 
       const mastPayload = {
         pm_rec_no: refNo,
@@ -406,22 +499,24 @@ function PurchaseTransactionContent() {
         pm_frm_code: company.frm_code
       };
 
-      // 1. Insert/Update pur_mast
+      // 2. Insert/Update pur_mast cleanly
       let pmRefNo = null;
       if (mode === 'edit' && currentIndex >= 0 && invoices[currentIndex]) {
         pmRefNo = invoices[currentIndex].pm_ref_no;
         const { error } = await supabase.from('pur_mast').update(mastPayload).eq('pm_ref_no', pmRefNo);
         if (error) throw error;
-        // Delete old child records for update
+
+        // Delete old child records, expenses, and barcodes on modification to prevent duplicate insertion
         await supabase.from('pur_child').delete().eq('pm_ref_no', pmRefNo);
         await supabase.from('pur_expenses').delete().eq('pm_ref_no', pmRefNo);
+        await supabase.from('bar_temp').delete().eq('frm_code', company.frm_code).eq('inv_no', invoiceNo);
       } else {
         const { data: newMast, error } = await supabase.from('pur_mast').insert([mastPayload]).select('pm_ref_no').single();
         if (error) throw error;
         pmRefNo = newMast.pm_ref_no;
       }
 
-      // 2. Insert pur_child items
+      // 3. Insert pur_child items
       const childPayload = validItems.map((item, idx) => ({
         pm_ref_no: pmRefNo,
         pc_sno: idx + 1,
@@ -446,7 +541,7 @@ function PurchaseTransactionContent() {
       const { error: childError } = await supabase.from('pur_child').insert(childPayload);
       if (childError) throw childError;
 
-      // 3. Insert pur_expenses if any
+      // 4. Insert pur_expenses if any
       const validExpenses = otherExpenses.filter(e => e.exp_name && e.amount > 0);
       if (validExpenses.length > 0) {
         const expPayload = validExpenses.map(e => ({
@@ -457,7 +552,7 @@ function PurchaseTransactionContent() {
         await supabase.from('pur_expenses').insert(expPayload);
       }
 
-      // 4. Auto Barcode Generation based on Barcode Setting Master & Product Barcode Generation Type
+      // 5. Auto Barcode Generation based on Barcode Setting Master & Product Barcode Generation Type
       let createdBarcodesCount = 0;
       try {
         const prdCodes = validItems.map(i => i.prd_code).filter(Boolean);
@@ -494,7 +589,7 @@ function PurchaseTransactionContent() {
 
         validItems.forEach((item, idx) => {
           const prdInfo = prdMap.get(item.prd_code);
-          const genType = prdInfo?.barcode_gen_type || 'Auto Tracking Batch No';
+          const genType = prdInfo?.barcode_gen_type || 'Auto Tracking Unique No';
           const saleRate = item.sale_rate || prdInfo?.sales_price || item.rate;
           const costRate = item.txbl_rate || item.rate;
           const markup = costRate > 0 && saleRate > costRate ? Number((((saleRate - costRate) / costRate) * 100).toFixed(1)) : 0;
@@ -521,12 +616,12 @@ function PurchaseTransactionContent() {
                 markup: markup,
                 margin: margin,
                 print_count: 1,
-                grp_name: prdInfo?.product_group?.grp_name || '',
+                grp_name: prdInfo?.product_group?.grp_name || 'PURE SILK',
                 unit_name: item.unit
               });
               currentSeed++;
             }
-          } else if (genType === 'Auto Tracking Batch No' || genType === 'Auto Tracking Unique No' || !genType) {
+          } else if (genType === 'Auto Tracking Batch No' || !genType) {
             const barNo = `${prefix}${String(currentSeed).padStart(seedLen, '0')}${suffix}`;
             barEntries.push({
               bar_no: barNo,
@@ -545,7 +640,7 @@ function PurchaseTransactionContent() {
               markup: markup,
               margin: margin,
               print_count: 1,
-              grp_name: prdInfo?.product_group?.grp_name || '',
+              grp_name: prdInfo?.product_group?.grp_name || 'PURE SILK',
               unit_name: item.unit
             });
             currentSeed++;
@@ -554,8 +649,12 @@ function PurchaseTransactionContent() {
 
         if (barEntries.length > 0) {
           const { data: insertedBars } = await supabase.from('bar_temp').insert(barEntries).select('*');
-          if (barRule.ref_no) {
-            await supabase.from('barcode_setting').update({ seed: currentSeed }).eq('ref_no', barRule.ref_no);
+          try {
+            if (barRule.ref_no) {
+              await supabase.from('barcode_setting').update({ seed: currentSeed }).eq('ref_no', barRule.ref_no);
+            }
+          } catch (e) {
+            console.log("barcode_setting update skipped");
           }
           if (insertedBars && insertedBars.length > 0) {
             createdBarcodesCount = insertedBars.length;
@@ -581,31 +680,7 @@ function PurchaseTransactionContent() {
     }
   };
 
-  // Reset form to Add New Mode
-  const handleResetForm = () => {
-    setMode('add');
-    setCurrentIndex(-1);
-    setInvoiceNo('');
-    setSelectedVendorId('');
-    setTaxCode('LOCAL');
-    setTaxOnExpenses(false);
-    setSalesPerson('Direct');
-    setRemarks('');
-    setCashDisc(0);
-    setSplDisc(0);
-    setTdsAmt(0);
-    setRoundOff(0);
-    setItems([{ sno: 1, prd_name: '', qty: 0, unit: 'NOS', rate: 0, amount: 0, disc_perc: 0, disc_amt: 0, expenses: 0, gst_perc: 0, txbl_rate: 0, net_rate: 0, hsn_code: '' }]);
-    setOtherExpenses([{ exp_name: 'Expenses A/c', amount: 0 }, { exp_name: 'Freight Charges', amount: 0 }]);
-    setGeneratedBarcodes([]);
-    setShowBarcodeModal(false);
-    
-    if (invoices.length > 0) {
-      setRefNo(invoices[0].pm_ref_no + 1);
-    }
-  };
-
-  // Fixed Navigation handlers
+  // Navigation handlers
   const handlePrev = () => {
     if (invoices.length === 0) return;
     let nextIdx = currentIndex === -1 ? 0 : currentIndex + 1;
@@ -634,7 +709,7 @@ function PurchaseTransactionContent() {
             {mode === 'view' ? 'View Mode' : mode === 'edit' ? 'Edit Mode' : 'Add New Mode'}
           </span>
         </div>
-        <div className="text-sm cursor-pointer hover:bg-amber-600 px-2 py-0.5 rounded" onClick={() => router.push('/dashboard')}>✕</div>
+        <div className="text-sm cursor-pointer hover:bg-amber-600 px-2 py-0.5 rounded font-bold" onClick={() => router.push('/dashboard')}>✕</div>
       </div>
 
       {/* Main Top Header Cards Grid */}
@@ -1024,7 +1099,7 @@ function PurchaseTransactionContent() {
           />
         </div>
 
-        {/* Action Controls */}
+        {/* Action Controls Toolbar matching user request */}
         <div className="flex flex-wrap items-center gap-2">
           <Button 
             size="sm" 
@@ -1045,11 +1120,20 @@ function PurchaseTransactionContent() {
             Next [Pg Down]
           </Button>
 
-          <Button size="sm" variant="outline" className="h-8 text-xs" onClick={handleResetForm}>
+          <Button size="sm" variant="outline" className="h-8 text-xs font-bold" onClick={handleResetForm}>
             New [F4]
           </Button>
-          <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => setMode('edit')}>
+          <Button size="sm" variant="outline" className="h-8 text-xs font-bold" onClick={() => setMode('edit')}>
             Edit [F9]
+          </Button>
+          <Button 
+            size="sm" 
+            variant="destructive" 
+            className="h-8 text-xs font-bold"
+            onClick={handleDeleteInvoice}
+            disabled={mode === 'add' || invoices.length === 0}
+          >
+            Delete [F8]
           </Button>
           <Button 
             size="sm" 
@@ -1094,7 +1178,7 @@ function PurchaseTransactionContent() {
           <div className="bg-background w-full max-w-4xl rounded-lg shadow-2xl border overflow-hidden flex flex-col max-h-[85vh]">
             <div className="bg-emerald-600 text-white font-bold px-4 py-2 flex justify-between items-center text-sm">
               <span>Barcodes Generated for Invoice #{invoiceNo || refNo}</span>
-              <button onClick={() => setShowBarcodeModal(false)} className="hover:bg-emerald-700 px-2 py-0.5 rounded">✕</button>
+              <button onClick={() => setShowBarcodeModal(false)} className="hover:bg-emerald-700 px-2 py-0.5 rounded font-bold">✕</button>
             </div>
             
             <div className="p-4 space-y-3 flex-1 overflow-auto">
