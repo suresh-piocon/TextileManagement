@@ -127,6 +127,7 @@ export const MENU_ITEMS: MenuItem[] = [
       { id: "weft-type", label: "Weft Type", icon: "Columns3", href: "/master/weft-type" },
       { id: "units", label: "Units", icon: "Ruler", href: "/master/units" },
       { id: "tax-setup", label: "Tax Setup", icon: "Receipt", href: "/master/tax-setup" },
+      { id: "barcode-setting", label: "Barcode Setting", icon: "Barcode", href: "/master/barcode-setting" },
     ],
   },
   {

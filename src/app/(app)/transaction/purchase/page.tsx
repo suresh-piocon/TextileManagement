@@ -361,9 +361,98 @@ export default function PurchaseTransactionPage() {
         await supabase.from('pur_expenses').insert(expPayload);
       }
 
-      toast({ title: 'Purchase invoice saved successfully!', variant: 'success' });
+      // 4. Auto Barcode Generation based on Barcode Setting Master & Product Barcode Generation Type
+      try {
+        const prdCodes = validItems.map(i => i.prd_code).filter(Boolean);
+        const [settingRes, prdRes] = await Promise.all([
+          supabase.from('barcode_setting').select('*').or(`frm_code.eq.${company.frm_code},frm_code.is.null`).order('ref_no', { ascending: true }).limit(1).single(),
+          prdCodes.length > 0 
+            ? supabase.from('product').select('ref_no, prd_code, barcode_gen_type, sales_price, rate, product_group(grp_name)').in('ref_no', prdCodes)
+            : { data: [] }
+        ]);
+
+        const barRule = settingRes.data || { prefix: 'KS', seed: 2304, seed_len: 5, suffix: '' };
+        const prdMap = new Map((prdRes.data || []).map((p: any) => [p.ref_no, p]));
+
+        let currentSeed = barRule.seed || 2304;
+        const prefix = barRule.prefix || 'KS';
+        const suffix = barRule.suffix || '';
+        const seedLen = barRule.seed_len || 5;
+
+        const barEntries: any[] = [];
+
+        validItems.forEach((item, idx) => {
+          const prdInfo = prdMap.get(item.prd_code);
+          const genType = prdInfo?.barcode_gen_type || 'Auto Tracking Batch No';
+
+          if (genType === 'Auto Tracking Unique No') {
+            // Generate 1 unique barcode for each unit count (e.g. qty = 30 -> 30 barcodes)
+            const unitQty = Math.max(1, Math.floor(item.qty));
+            for (let u = 0; u < unitQty; u++) {
+              const barNo = `${prefix}${String(currentSeed).padStart(seedLen, '0')}${suffix}`;
+              barEntries.push({
+                bar_no: barNo,
+                prcode: item.prd_code || null,
+                grp_code: null,
+                pc_pur_rate: item.rate,
+                pc_sale_rate: prdInfo?.sales_price || item.rate,
+                qty: 1,
+                cr_code: parseInt(selectedVendorId),
+                sold_status: 'A',
+                frm_code: company.frm_code,
+                inv_no: invoiceNo,
+                inv_date: invoiceDate,
+                entry_sno: idx + 1,
+                cost_rate: item.txbl_rate,
+                markup: 0,
+                margin: 0,
+                print_count: 1,
+                grp_name: prdInfo?.product_group?.grp_name || '',
+                unit_name: item.unit
+              });
+              currentSeed++;
+            }
+          } else if (genType === 'Auto Tracking Batch No' || genType === 'Auto Tracking Unique No' || !genType) {
+            // Generate 1 batch barcode for the line
+            const barNo = `${prefix}${String(currentSeed).padStart(seedLen, '0')}${suffix}`;
+            barEntries.push({
+              bar_no: barNo,
+              prcode: item.prd_code || null,
+              grp_code: null,
+              pc_pur_rate: item.rate,
+              pc_sale_rate: prdInfo?.sales_price || item.rate,
+              qty: item.qty,
+              cr_code: parseInt(selectedVendorId),
+              sold_status: 'A',
+              frm_code: company.frm_code,
+              inv_no: invoiceNo,
+              inv_date: invoiceDate,
+              entry_sno: idx + 1,
+              cost_rate: item.txbl_rate,
+              markup: 0,
+              margin: 0,
+              print_count: 1,
+              grp_name: prdInfo?.product_group?.grp_name || '',
+              unit_name: item.unit
+            });
+            currentSeed++;
+          }
+        });
+
+        if (barEntries.length > 0) {
+          await supabase.from('bar_temp').insert(barEntries);
+          if (barRule.ref_no) {
+            await supabase.from('barcode_setting').update({ seed: currentSeed }).eq('ref_no', barRule.ref_no);
+          }
+        }
+      } catch (barErr) {
+        console.error('Error generating barcodes:', barErr);
+      }
+
+      toast({ title: 'Purchase invoice saved & Barcodes generated successfully!', variant: 'success' });
       fetchData();
       handleResetForm();
+
     } catch (e: any) {
       toast({ title: 'Error saving purchase invoice', description: e.message, variant: 'destructive' });
     } finally {
