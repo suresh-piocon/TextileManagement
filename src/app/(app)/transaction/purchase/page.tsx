@@ -74,7 +74,7 @@ function PurchaseTransactionContent() {
 
   // Vendor & Tax State
   const [selectedVendorId, setSelectedVendorId] = useState<string>('');
-  const [taxCode, setTaxCode] = useState<string>('LOCAL'); // LOCAL | INTERSTATE | TAX FREE
+  const [taxCode, setTaxCode] = useState<string>('LOCAL'); // LOCAL | INTERSTATE | Bill of Supply
   const [taxOnExpenses, setTaxOnExpenses] = useState<boolean>(false);
   const [salesPerson, setSalesPerson] = useState<string>('Direct');
   const [remarks, setRemarks] = useState<string>('');
@@ -286,15 +286,31 @@ function PurchaseTransactionContent() {
   // Selected Vendor Details
   const selectedVendor = vendors.find(v => String(v.ledg_code) === String(selectedVendorId));
 
-  // Vendor selection handler with Auto Tax Code logic
+  // Vendor selection handler with Accurate State Code GST Tax Code logic
   const handleVendorSelect = (vendorId: string) => {
     setSelectedVendorId(vendorId);
     const vendor = vendors.find(v => String(v.ledg_code) === String(vendorId));
     if (vendor) {
-      const compStCode = company?.st_code || INDIAN_STATES.find(s => s.name.toLowerCase() === company?.state?.toLowerCase())?.code || '';
-      const vendorStCode = vendor.state_code || INDIAN_STATES.find(s => s.name.toLowerCase() === vendor.state?.toLowerCase())?.code || '';
-      
-      if (vendorStCode && compStCode && vendorStCode !== compStCode) {
+      // 1. Company State Code Extraction (from GSTIN prefix, st_code, or state name)
+      let compStateCode = company?.st_code || '';
+      if (!compStateCode && company?.gstin) {
+        compStateCode = company.gstin.substring(0, 2);
+      }
+      if (!compStateCode && company?.state) {
+        compStateCode = INDIAN_STATES.find(s => s.name.toLowerCase() === (company.state || '').toLowerCase())?.code || '';
+      }
+
+      // 2. Vendor State Code Extraction (from GSTIN prefix, state_code, or state name)
+      let vendorStateCode = vendor.state_code || vendor.st_code || '';
+      if (!vendorStateCode && vendor.gstin) {
+        vendorStateCode = vendor.gstin.substring(0, 2);
+      }
+      if (!vendorStateCode && vendor.state) {
+        vendorStateCode = INDIAN_STATES.find(s => s.name.toLowerCase() === (vendor.state || '').toLowerCase())?.code || '';
+      }
+
+      // 3. Compare State Codes: if different -> INTERSTATE (IGST), if same -> LOCAL (CGST+SGST)
+      if (vendorStateCode && compStateCode && String(vendorStateCode) !== String(compStateCode)) {
         setTaxCode('INTERSTATE');
       } else {
         setTaxCode('LOCAL');
@@ -302,19 +318,37 @@ function PurchaseTransactionContent() {
     }
   };
 
-  // Row update logic
+  // Bi-directional Row-wise Discount & Tax calculations
   const updateRow = (index: number, field: keyof PurchaseItemRow, value: any) => {
     const updated = [...items];
-    const row = { ...updated[index], [field]: value };
+    const row = { ...updated[index] };
 
-    // Auto Calculations
+    if (field === 'prd_name') {
+      row.prd_name = String(value);
+    } else {
+      (row as any)[field] = value;
+    }
+
     const qty = parseFloat(String(row.qty)) || 0;
     const rate = parseFloat(String(row.rate)) || 0;
-    const discPerc = parseFloat(String(row.disc_perc)) || 0;
-    const gstPerc = parseFloat(String(row.gst_perc)) || 0;
-
     const baseAmount = qty * rate;
-    const discAmt = (baseAmount * discPerc) / 100;
+
+    // Handle bi-directional Row Discount (disc_perc <-> disc_amt)
+    if (field === 'disc_perc') {
+      const discPerc = parseFloat(String(value)) || 0;
+      row.disc_perc = discPerc;
+      row.disc_amt = Number(((baseAmount * discPerc) / 100).toFixed(2));
+    } else if (field === 'disc_amt') {
+      const discAmt = parseFloat(String(value)) || 0;
+      row.disc_amt = discAmt;
+      row.disc_perc = baseAmount > 0 ? Number(((discAmt / baseAmount) * 100).toFixed(2)) : 0;
+    } else {
+      const discPerc = parseFloat(String(row.disc_perc)) || 0;
+      row.disc_amt = Number(((baseAmount * discPerc) / 100).toFixed(2));
+    }
+
+    const discAmt = row.disc_amt || 0;
+    const gstPerc = parseFloat(String(row.gst_perc)) || 0;
     const netBaseAmount = baseAmount - discAmt;
     const txblRate = qty > 0 ? netBaseAmount / qty : 0;
 
@@ -323,7 +357,6 @@ function PurchaseTransactionContent() {
     const netRate = txblRate + taxPerUnit;
 
     row.amount = Number(baseAmount.toFixed(2));
-    row.disc_amt = Number(discAmt.toFixed(2));
     row.txbl_rate = Number(txblRate.toFixed(2));
     row.net_rate = Number(netRate.toFixed(2));
 
@@ -417,21 +450,39 @@ function PurchaseTransactionContent() {
     setItems(updated);
   };
 
-  // Summaries calculation
+  // Summaries & Tax Calculations
   const subTotal = items.reduce((sum, item) => sum + (item.amount || 0), 0);
   const totalItemDisc = items.reduce((sum, item) => sum + (item.disc_amt || 0), 0);
   const totalDisc = totalItemDisc + (cashDisc || 0) + (splDisc || 0);
-  const taxableAmt = Math.max(0, subTotal - totalDisc);
 
-  // Total Taxes Calculation
+  const totalOtherExpenses = otherExpenses.reduce((sum, e) => sum + (parseFloat(String(e.amount)) || 0), 0);
+
+  // Taxable Amount calculation:
+  // If Tax On Expenses is checked, total other charges are included in the taxable total before tax calculation
+  const baseTaxable = Math.max(0, subTotal - totalDisc);
+  const taxableAmt = taxOnExpenses ? baseTaxable + totalOtherExpenses : baseTaxable;
+
+  // Total Taxes Calculation based on Tax Code (LOCAL, INTERSTATE, or Bill of Supply)
   const totalTaxes = items.reduce((sum, item) => {
+    if (taxCode === 'Bill of Supply') return sum;
+
     const itemNetBase = (item.amount || 0) - (item.disc_amt || 0);
-    const itemTax = (itemNetBase * (item.gst_perc || 0)) / 100;
+    const itemShare = subTotal > 0 ? (item.amount || 0) / subTotal : 0;
+    
+    // Proportionate header discounts & expenses share
+    const itemHeaderDisc = (cashDisc + splDisc) * itemShare;
+    const itemExtraExp = taxOnExpenses ? totalOtherExpenses * itemShare : 0;
+
+    const itemTaxable = Math.max(0, itemNetBase - itemHeaderDisc + itemExtraExp);
+    const itemTax = (itemTaxable * (item.gst_perc || 0)) / 100;
     return sum + itemTax;
   }, 0);
 
-  const totalOtherExpenses = otherExpenses.reduce((sum, e) => sum + (parseFloat(String(e.amount)) || 0), 0);
-  const rawTotalValue = taxableAmt + totalTaxes + totalOtherExpenses - tdsAmt;
+  // Grand Total Payable Calculation
+  const rawTotalValue = taxOnExpenses 
+    ? taxableAmt + totalTaxes - tdsAmt 
+    : taxableAmt + totalTaxes + totalOtherExpenses - tdsAmt;
+
   const netTotalValue = Math.round(rawTotalValue + roundOff);
   const totalQty = items.reduce((sum, item) => sum + (item.qty || 0), 0);
 
@@ -480,7 +531,7 @@ function PurchaseTransactionContent() {
         pm_bill_date: invoiceDate,
         pm_cr_code: parseInt(selectedVendorId),
         pm_tax_model: taxCode,
-        pm_reg_code: taxCode === 'LOCAL' ? 50 : 51,
+        pm_reg_code: taxCode === 'LOCAL' ? 50 : taxCode === 'INTERSTATE' ? 51 : 0,
         pm_tax_on_exp: taxOnExpenses,
         pm_sales_person: salesPerson,
         pm_sub_total: subTotal,
@@ -816,16 +867,17 @@ function PurchaseTransactionContent() {
                 >
                   <option value="LOCAL">LOCAL (IntraState CGST+SGST)</option>
                   <option value="INTERSTATE">INTERSTATE (IGST)</option>
-                  <option value="TAX FREE">TAX FREE</option>
+                  <option value="Bill of Supply">Bill of Supply (No Tax)</option>
                 </select>
               </div>
 
               <div className="flex items-center gap-4 text-xs">
-                <label className="flex items-center gap-1.5 cursor-pointer font-medium">
+                <label className="flex items-center gap-1.5 cursor-pointer font-bold text-amber-700 dark:text-amber-400">
                   <input 
                     type="checkbox"
                     checked={taxOnExpenses}
                     onChange={e => setTaxOnExpenses(e.target.checked)}
+                    className="rounded border-amber-500"
                   />
                   Tax On Expenses
                 </label>
@@ -943,8 +995,13 @@ function PurchaseTransactionContent() {
                         className="h-7 text-xs text-right font-mono px-1"
                       />
                     </TableCell>
-                    <TableCell className="text-right font-mono p-1">
-                      {(row.disc_amt || 0).toFixed(2)}
+                    <TableCell className="p-1">
+                      <Input
+                        type="number"
+                        value={row.disc_amt || ''}
+                        onChange={e => updateRow(idx, 'disc_amt', e.target.value)}
+                        className="h-7 text-xs text-right font-mono px-1 font-semibold"
+                      />
                     </TableCell>
                     <TableCell className="p-1">
                       <Input
@@ -1012,7 +1069,7 @@ function PurchaseTransactionContent() {
                 type="number"
                 value={cashDisc || ''}
                 onChange={e => setCashDisc(parseFloat(e.target.value) || 0)}
-                className="h-6 w-24 text-xs text-right font-mono bg-background"
+                className="h-6 w-24 text-xs text-right font-mono bg-background font-bold"
               />
             </div>
             <div className="flex justify-between items-center">
@@ -1021,7 +1078,7 @@ function PurchaseTransactionContent() {
                 type="number"
                 value={splDisc || ''}
                 onChange={e => setSplDisc(parseFloat(e.target.value) || 0)}
-                className="h-6 w-24 text-xs text-right font-mono bg-background"
+                className="h-6 w-24 text-xs text-right font-mono bg-background font-bold"
               />
             </div>
             <div className="flex justify-between items-center border-t pt-1 font-bold">
@@ -1029,8 +1086,8 @@ function PurchaseTransactionContent() {
               <span className="font-mono text-red-600">₹{totalDisc.toFixed(2)}</span>
             </div>
             <div className="flex justify-between items-center font-bold">
-              <span>Taxable Amt</span>
-              <span className="font-mono">₹{taxableAmt.toFixed(2)}</span>
+              <span>Taxable Amt {taxOnExpenses && <span className="text-[10px] text-amber-600">(Inc. Exp)</span>}</span>
+              <span className="font-mono text-blue-600 dark:text-blue-400">₹{taxableAmt.toFixed(2)}</span>
             </div>
             <div className="flex justify-between items-center font-bold">
               <span>Total Taxes</span>
@@ -1108,7 +1165,7 @@ function PurchaseTransactionContent() {
           />
         </div>
 
-        {/* Action Controls Toolbar matching user request */}
+        {/* Action Controls Toolbar */}
         <div className="flex flex-wrap items-center gap-2">
           <Button 
             size="sm" 
