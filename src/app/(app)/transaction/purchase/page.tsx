@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, Suspense } from 'react';
+import { useState, useEffect, useCallback, useRef, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import { useApp } from '@/hooks/use-app';
@@ -55,6 +55,13 @@ function PurchaseTransactionContent() {
   const [vendors, setVendors] = useState<any[]>([]);
   const [expenseLedgers, setExpenseLedgers] = useState<any[]>([]);
 
+  // Header Element Focus Refs
+  const invoiceNoRef = useRef<HTMLInputElement | null>(null);
+  const invoiceDateRef = useRef<HTMLInputElement | null>(null);
+  const billTypeRef = useRef<HTMLSelectElement | null>(null);
+  const vendorSelectRef = useRef<HTMLSelectElement | null>(null);
+  const firstProdInputRef = useRef<HTMLInputElement | null>(null);
+
   // 2-Step Modal State
   const [isProductModalOpen, setIsProductModalOpen] = useState(false);
   const [isStockModalOpen, setIsStockModalOpen] = useState(false);
@@ -95,6 +102,22 @@ function PurchaseTransactionContent() {
     { exp_name: 'Expenses A/c', amount: 0 },
     { exp_name: 'Freight Charges', amount: 0 }
   ]);
+
+  // Total Quantity Calculation
+  const totalQty = items.reduce((sum, item) => sum + (item.qty || 0), 0);
+
+  // Auto-Fill Remarks Helper (Bill No, Bill Date, Qty)
+  const handleAutoFillRemarks = useCallback(() => {
+    const invStr = invoiceNo || String(refNo);
+    setRemarks(`Bill No: ${invStr}, Date: ${invoiceDate}, Qty: ${totalQty.toFixed(2)}`);
+  }, [invoiceNo, refNo, invoiceDate, totalQty]);
+
+  // Auto-fill remarks when invoice metadata changes in Add Mode
+  useEffect(() => {
+    if (mode === 'add' && (!remarks || remarks.startsWith('Bill No:'))) {
+      handleAutoFillRemarks();
+    }
+  }, [invoiceNo, refNo, invoiceDate, totalQty, mode, remarks, handleAutoFillRemarks]);
 
   // Load existing invoice into form
   const loadInvoiceIntoForm = useCallback(async (inv: any) => {
@@ -245,6 +268,10 @@ function PurchaseTransactionContent() {
       } else if (e.key === 'F8') {
         e.preventDefault();
         handleDeleteInvoice();
+      } else if (e.key === 'F10') {
+        e.preventDefault();
+        e.stopPropagation();
+        handleSaveInvoice();
       } else if (e.key === 'F11') {
         e.preventDefault();
         router.push(`/inventory/barcode?inv_no=${encodeURIComponent(invoiceNo || String(refNo))}`);
@@ -303,7 +330,6 @@ function PurchaseTransactionContent() {
     setSelectedVendorId(vendorId);
     const vendor = vendors.find(v => String(v.ledg_code) === String(vendorId));
     if (vendor) {
-      // 1. Company State Code Extraction
       let compStateCode = company?.st_code || '';
       if (!compStateCode && company?.gstin) {
         compStateCode = company.gstin.substring(0, 2);
@@ -312,7 +338,6 @@ function PurchaseTransactionContent() {
         compStateCode = INDIAN_STATES.find(s => s.name.toLowerCase() === (company.state || '').toLowerCase())?.code || '';
       }
 
-      // 2. Vendor State Code Extraction
       let vendorStateCode = vendor.state_code || vendor.st_code || '';
       if (!vendorStateCode && vendor.gstin) {
         vendorStateCode = vendor.gstin.substring(0, 2);
@@ -321,7 +346,6 @@ function PurchaseTransactionContent() {
         vendorStateCode = INDIAN_STATES.find(s => s.name.toLowerCase() === (vendor.state || '').toLowerCase())?.code || '';
       }
 
-      // 3. Compare State Codes: if different -> INTERSTATE (IGST), if same -> LOCAL (CGST+SGST)
       if (vendorStateCode && compStateCode && String(vendorStateCode) !== String(compStateCode)) {
         setTaxCode('INTERSTATE');
       } else {
@@ -364,7 +388,6 @@ function PurchaseTransactionContent() {
     const netBaseAmount = baseAmount - discAmt;
     const txblRate = qty > 0 ? netBaseAmount / qty : 0;
 
-    // Calculate tax per unit
     const taxPerUnit = (txblRate * gstPerc) / 100;
     const netRate = txblRate + taxPerUnit;
 
@@ -376,15 +399,17 @@ function PurchaseTransactionContent() {
     setItems(updated);
   };
 
-  // Enter Key Focus Movement Helper across Grid Inputs (behaves like Tab)
-  const handleGridInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+  // Enter Key Focus Movement Helper across Grid Inputs
+  const handleGridInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement | HTMLSelectElement>) => {
     if (e.key === 'Enter') {
       e.preventDefault();
-      const inputs = Array.from(document.querySelectorAll('.grid-input')) as HTMLInputElement[];
+      const inputs = Array.from(document.querySelectorAll('.grid-input')) as (HTMLInputElement | HTMLSelectElement)[];
       const currentIndex = inputs.indexOf(e.currentTarget);
       if (currentIndex >= 0 && currentIndex < inputs.length - 1) {
         inputs[currentIndex + 1].focus();
-        inputs[currentIndex + 1].select();
+        if ('select' in inputs[currentIndex + 1]) {
+          (inputs[currentIndex + 1] as HTMLInputElement).select();
+        }
       }
     }
   };
@@ -482,19 +507,17 @@ function PurchaseTransactionContent() {
 
   const totalOtherExpenses = otherExpenses.reduce((sum, e) => sum + (parseFloat(String(e.amount)) || 0), 0);
 
-  // Taxable Amount calculation:
-  // If Tax On Expenses is checked, total other charges are included in the taxable total before tax calculation
+  // Taxable Amount calculation
   const baseTaxable = Math.max(0, subTotal - totalDisc);
   const taxableAmt = taxOnExpenses ? baseTaxable + totalOtherExpenses : baseTaxable;
 
-  // Total Taxes Calculation based on Tax Code (LOCAL, INTERSTATE, or Bill of Supply)
+  // Total Taxes Calculation based on Tax Code
   const totalTaxes = items.reduce((sum, item) => {
     if (taxCode === 'Bill of Supply') return sum;
 
     const itemNetBase = (item.amount || 0) - (item.disc_amt || 0);
     const itemShare = subTotal > 0 ? (item.amount || 0) / subTotal : 0;
     
-    // Proportionate header discounts & expenses share
     const itemHeaderDisc = (cashDisc + splDisc) * itemShare;
     const itemExtraExp = taxOnExpenses ? totalOtherExpenses * itemShare : 0;
 
@@ -509,7 +532,6 @@ function PurchaseTransactionContent() {
     : taxableAmt + totalTaxes + totalOtherExpenses - tdsAmt;
 
   const netTotalValue = Math.round(rawTotalValue + roundOff);
-  const totalQty = items.reduce((sum, item) => sum + (item.qty || 0), 0);
 
   // Save Purchase Invoice with Duplicate Protection & Clean Re-Insertion
   const handleSaveInvoice = async () => {
@@ -527,7 +549,7 @@ function PurchaseTransactionContent() {
     try {
       setLoading(true);
 
-      // 1. AVOID DUPLICATE INVOICE ENTRY IN ADD MODE (Same Invoice No + Date + Vendor + Financial Year)
+      // 1. AVOID DUPLICATE INVOICE ENTRY IN ADD MODE
       if (mode === 'add') {
         const { data: dupCheck } = await supabase
           .from('pur_mast')
@@ -586,7 +608,6 @@ function PurchaseTransactionContent() {
         const { error } = await supabase.from('pur_mast').update(mastPayload).eq('pm_ref_no', pmRefNo);
         if (error) throw error;
 
-        // Delete old child records, expenses, and barcodes on modification to prevent duplicate insertion
         await supabase.from('pur_child').delete().eq('pm_ref_no', pmRefNo);
         await supabase.from('pur_expenses').delete().eq('pm_ref_no', pmRefNo);
         await supabase.from('bar_temp').delete().eq('frm_code', company.frm_code).eq('inv_no', invoiceNo);
@@ -632,7 +653,7 @@ function PurchaseTransactionContent() {
         await supabase.from('pur_expenses').insert(expPayload);
       }
 
-      // 5. Auto Barcode Generation based on Barcode Setting Master & Product Barcode Generation Type
+      // 5. Auto Barcode Generation
       let createdBarcodesCount = 0;
       try {
         const prdCodes = validItems.map(i => i.prd_code).filter(Boolean);
@@ -648,7 +669,6 @@ function PurchaseTransactionContent() {
         const barRule = settingsList.length > 0 ? settingsList[0] : { prefix: 'KS', seed: 2304, seed_len: 5, suffix: '' };
         const prdMap = new Map((prdRes.data || []).map((p: any) => [p.ref_no, p]));
 
-        // Safe Seed Recovery: find highest numerical seed in DB to guarantee uniqueness
         let maxSeedInDb = (barRule.seed || 2304) - 1;
         if (barRes.data && barRes.data.length > 0) {
           barRes.data.forEach((b: any) => {
@@ -809,10 +829,17 @@ function PurchaseTransactionContent() {
           <div className="flex items-center justify-between gap-1">
             <span className="bg-amber-600 text-white px-2 py-0.5 font-bold rounded">Invoice No</span>
             <input 
+              ref={invoiceNoRef}
               type="text"
               value={invoiceNo} 
               onChange={e => setInvoiceNo(e.target.value)} 
-              onKeyDown={handleGridInputKeyDown}
+              onKeyDown={e => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  invoiceDateRef.current?.focus();
+                  invoiceDateRef.current?.select();
+                }
+              }}
               className="grid-input h-6 text-xs bg-background border border-input rounded px-2 max-w-[120px] font-mono text-right font-bold focus:outline-none"
               placeholder="Inv No"
             />
@@ -826,10 +853,16 @@ function PurchaseTransactionContent() {
           <div className="flex items-center justify-between gap-1">
             <span className="text-muted-foreground">Invoice Date</span>
             <input 
+              ref={invoiceDateRef}
               type="date"
               value={invoiceDate} 
               onChange={e => setInvoiceDate(e.target.value)} 
-              onKeyDown={handleGridInputKeyDown}
+              onKeyDown={e => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  billTypeRef.current?.focus();
+                }
+              }}
               className="grid-input h-6 text-xs bg-background border border-input rounded px-2 max-w-[130px] font-mono focus:outline-none"
             />
           </div>
@@ -837,9 +870,16 @@ function PurchaseTransactionContent() {
           <div className="flex items-center justify-between gap-1">
             <span className="text-muted-foreground">Bill Type</span>
             <select 
+              ref={billTypeRef}
               className="grid-input flex h-6 rounded border border-input bg-background px-2 text-xs font-bold focus:outline-none"
               value={billType}
               onChange={e => setBillType(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  vendorSelectRef.current?.focus();
+                }
+              }}
             >
               <option value="CREDIT">CREDIT</option>
               <option value="CASH">CASH</option>
@@ -859,9 +899,22 @@ function PurchaseTransactionContent() {
               <div className="flex items-center gap-2">
                 <Label className="w-24 text-xs font-bold">Account Name</Label>
                 <select 
+                  ref={vendorSelectRef}
                   className="grid-input flex-1 h-7 rounded border border-input bg-background px-2 text-xs font-bold focus:outline-none"
                   value={selectedVendorId}
                   onChange={e => handleVendorSelect(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      if (items.length > 0 && !items[0].prd_name) {
+                        setActiveRowIndex(0);
+                        setIsProductModalOpen(true);
+                      } else {
+                        firstProdInputRef.current?.focus();
+                        firstProdInputRef.current?.select();
+                      }
+                    }
+                  }}
                 >
                   <option value="">Select Account / Vendor Ledger</option>
                   {vendors.map(v => (
@@ -967,6 +1020,7 @@ function PurchaseTransactionContent() {
                     <TableCell className="p-1">
                       <div className="flex gap-1 items-center">
                         <input
+                          ref={idx === 0 ? firstProdInputRef : undefined}
                           type="text"
                           value={row.prd_name}
                           onChange={e => updateRow(idx, 'prd_name', e.target.value)}
@@ -1199,9 +1253,19 @@ function PurchaseTransactionContent() {
           <Input
             value={remarks}
             onChange={e => setRemarks(e.target.value)}
-            placeholder="Enter bill remarks or reference comments..."
-            className="h-8 text-xs bg-background flex-1"
+            placeholder="Bill No, Date, Qty auto fill..."
+            className="h-8 text-xs bg-background flex-1 font-mono"
           />
+          <Button 
+            type="button" 
+            size="sm" 
+            variant="outline" 
+            className="h-8 text-[11px] font-bold bg-amber-100 text-amber-900 border-amber-400 hover:bg-amber-200"
+            onClick={handleAutoFillRemarks}
+            title="Auto-fill bill metadata into remarks"
+          >
+            Auto-Fill
+          </Button>
         </div>
 
         {/* Action Controls Toolbar */}
