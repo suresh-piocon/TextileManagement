@@ -106,18 +106,27 @@ function PurchaseTransactionContent() {
   // Total Quantity Calculation
   const totalQty = items.reduce((sum, item) => sum + (item.qty || 0), 0);
 
-  // Auto-Fill Remarks Helper (Bill No, Bill Date, Qty)
-  const handleAutoFillRemarks = useCallback(() => {
-    const invStr = invoiceNo || String(refNo);
-    setRemarks(`Bill No: ${invStr}, Date: ${invoiceDate}, Qty: ${totalQty.toFixed(2)}`);
-  }, [invoiceNo, refNo, invoiceDate, totalQty]);
+  // Format Remarks Helper: Ex BillNo 890/26-27 Date 20-08-26,Qty 6
+  const formatRemarksString = useCallback((invNo: string | number, dtStr: string, qty: number) => {
+    let dateFormatted = dtStr;
+    if (dtStr && dtStr.includes('-')) {
+      const parts = dtStr.split('-');
+      if (parts.length === 3) {
+        const yr = parts[0].length === 4 ? parts[0].substring(2) : parts[0];
+        dateFormatted = `${parts[2]}-${parts[1]}-${yr}`;
+      }
+    }
+    const cleanQty = Number.isInteger(qty) ? String(qty) : qty.toFixed(2);
+    return `BillNo ${invNo} Date ${dateFormatted},Qty ${cleanQty}`;
+  }, []);
 
   // Auto-fill remarks when invoice metadata changes in Add Mode
   useEffect(() => {
-    if (mode === 'add' && (!remarks || remarks.startsWith('Bill No:'))) {
-      handleAutoFillRemarks();
+    if (mode === 'add' && (!remarks || remarks.startsWith('BillNo'))) {
+      const invStr = invoiceNo || String(refNo);
+      setRemarks(formatRemarksString(invStr, invoiceDate, totalQty));
     }
-  }, [invoiceNo, refNo, invoiceDate, totalQty, mode, remarks, handleAutoFillRemarks]);
+  }, [invoiceNo, refNo, invoiceDate, totalQty, mode, remarks, formatRemarksString]);
 
   // Load existing invoice into form
   const loadInvoiceIntoForm = useCallback(async (inv: any) => {
@@ -549,6 +558,11 @@ function PurchaseTransactionContent() {
     try {
       setLoading(true);
 
+      // Auto-fill remarks in exact requested format before saving: Ex BillNo 890/26-27 Date 20-08-26,Qty 6
+      const finalRemarks = remarks.trim() 
+        ? remarks 
+        : formatRemarksString(invoiceNo || refNo, invoiceDate, totalQty);
+
       // 1. AVOID DUPLICATE INVOICE ENTRY IN ADD MODE
       if (mode === 'add') {
         const { data: dupCheck } = await supabase
@@ -597,7 +611,7 @@ function PurchaseTransactionContent() {
         pm_grd_tot: rawTotalValue,
         pm_rnd_off: roundOff,
         pm_net_total: netTotalValue,
-        pm_remarks: remarks,
+        pm_remarks: finalRemarks,
         pm_frm_code: company.frm_code
       };
 
@@ -1247,24 +1261,14 @@ function PurchaseTransactionContent() {
 
       {/* Bottom Remarks & Action Toolbar Bar */}
       <div className="bg-card border rounded p-3 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2 flex-1 max-w-xl">
-          <Label className="text-xs font-bold">Remarks</Label>
+        <div className="flex items-center gap-2 flex-1 min-w-[320px]">
+          <Label className="text-xs font-bold text-amber-800 dark:text-amber-300">Remarks</Label>
           <Input
             value={remarks}
             onChange={e => setRemarks(e.target.value)}
-            placeholder="Bill No, Date, Qty auto fill..."
-            className={`h-8 text-xs bg-background flex-1 font-mono ${focusHighlightClass}`}
+            placeholder="Ex BillNo 890/26-27 Date 20-08-26,Qty 6"
+            className={`h-9 text-xs bg-background flex-1 font-mono font-bold border-amber-400 text-foreground ${focusHighlightClass}`}
           />
-          <Button 
-            type="button" 
-            size="sm" 
-            variant="outline" 
-            className="h-8 text-[11px] font-bold bg-amber-100 text-amber-900 border-amber-400 hover:bg-amber-200"
-            onClick={handleAutoFillRemarks}
-            title="Auto-fill bill metadata into remarks"
-          >
-            Auto-Fill
-          </Button>
         </div>
 
         {/* Action Controls Toolbar */}
