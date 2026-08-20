@@ -910,12 +910,8 @@ function PurchaseTransactionContent() {
                   onKeyDown={e => {
                     if (e.key === 'Enter') {
                       e.preventDefault();
-                      if (items.length > 0 && !items[0].prd_name) {
-                        setActiveRowIndex(0);
-                        setIsProductModalOpen(true);
-                      } else {
-                        firstProdInputRef.current?.focus();
-                      }
+                      setActiveRowIndex(0);
+                      setIsProductModalOpen(true);
                     }
                   }}
                 >
