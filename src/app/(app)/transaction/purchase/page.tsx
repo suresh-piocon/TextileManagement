@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import { useApp } from '@/hooks/use-app';
 import { useToast } from '@/components/ui/toast';
@@ -36,6 +37,7 @@ interface ExpenseRow {
 }
 
 export default function PurchaseTransactionPage() {
+  const router = useRouter();
   const { company } = useApp();
   const supabase = createClient();
   const { toast } = useToast();
@@ -54,6 +56,10 @@ export default function PurchaseTransactionPage() {
   const [isStockModalOpen, setIsStockModalOpen] = useState(false);
   const [selectedProductForStock, setSelectedProductForStock] = useState<any | null>(null);
   const [activeRowIndex, setActiveRowIndex] = useState<number | null>(null);
+
+  // Generated Barcodes View Modal State
+  const [showBarcodeModal, setShowBarcodeModal] = useState(false);
+  const [generatedBarcodes, setGeneratedBarcodes] = useState<any[]>([]);
 
   // Form Header State
   const [refNo, setRefNo] = useState<number>(1);
@@ -94,7 +100,7 @@ export default function PurchaseTransactionPage() {
       const [vendorsRes, expensesRes, invoicesRes] = await Promise.all([
         supabase.from('ledger').select('*').eq('frm_code', company.frm_code).order('ledg_name'),
         supabase.from('ledger').select('*').eq('frm_code', company.frm_code).order('ledg_name'),
-        supabase.from('pur_mast').select('*, ledger(ledg_name, city, cell_no1, gstin, state)').eq('pm_frm_code', company.frm_code).order('pm_ref_no', { ascending: false })
+        supabase.from('pur_mast').select('*, ledger:pm_cr_code(ledg_name, city, cell_no1, gstin, state)').eq('pm_frm_code', company.frm_code).order('pm_ref_no', { ascending: false })
       ]);
 
       setVendors(vendorsRes.data || []);
@@ -263,6 +269,25 @@ export default function PurchaseTransactionPage() {
   const netTotalValue = Math.round(rawTotalValue + roundOff);
   const totalQty = items.reduce((sum, item) => sum + (item.qty || 0), 0);
 
+  // Fetch Barcodes generated for current invoice
+  const fetchBarcodesForInvoice = async (invNoToFetch: string) => {
+    if (!company?.frm_code || !invNoToFetch) return;
+    try {
+      const { data } = await supabase
+        .from('bar_temp')
+        .select('*, product(prd_code, prd_name, sales_price)')
+        .eq('frm_code', company.frm_code)
+        .eq('inv_no', invNoToFetch);
+      
+      setGeneratedBarcodes(data || []);
+      if (data && data.length > 0) {
+        setShowBarcodeModal(true);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
   // Save Purchase Invoice
   const handleSaveInvoice = async () => {
     if (!company?.frm_code) return;
@@ -362,6 +387,7 @@ export default function PurchaseTransactionPage() {
       }
 
       // 4. Auto Barcode Generation based on Barcode Setting Master & Product Barcode Generation Type
+      let createdBarcodesCount = 0;
       try {
         const prdCodes = validItems.map(i => i.prd_code).filter(Boolean);
         const [settingRes, prdRes] = await Promise.all([
@@ -400,7 +426,7 @@ export default function PurchaseTransactionPage() {
                 cr_code: parseInt(selectedVendorId),
                 sold_status: 'A',
                 frm_code: company.frm_code,
-                inv_no: invoiceNo,
+                inv_no: invoiceNo || String(refNo),
                 inv_date: invoiceDate,
                 entry_sno: idx + 1,
                 cost_rate: item.txbl_rate,
@@ -425,7 +451,7 @@ export default function PurchaseTransactionPage() {
               cr_code: parseInt(selectedVendorId),
               sold_status: 'A',
               frm_code: company.frm_code,
-              inv_no: invoiceNo,
+              inv_no: invoiceNo || String(refNo),
               inv_date: invoiceDate,
               entry_sno: idx + 1,
               cost_rate: item.txbl_rate,
@@ -440,19 +466,27 @@ export default function PurchaseTransactionPage() {
         });
 
         if (barEntries.length > 0) {
-          await supabase.from('bar_temp').insert(barEntries);
+          const { data: insertedBars } = await supabase.from('bar_temp').insert(barEntries).select('*');
           if (barRule.ref_no) {
             await supabase.from('barcode_setting').update({ seed: currentSeed }).eq('ref_no', barRule.ref_no);
+          }
+          if (insertedBars && insertedBars.length > 0) {
+            createdBarcodesCount = insertedBars.length;
+            setGeneratedBarcodes(insertedBars);
+            setShowBarcodeModal(true);
           }
         }
       } catch (barErr) {
         console.error('Error generating barcodes:', barErr);
       }
 
-      toast({ title: 'Purchase invoice saved & Barcodes generated successfully!', variant: 'success' });
-      fetchData();
-      handleResetForm();
+      toast({ 
+        title: 'Purchase Invoice Saved Successfully!', 
+        description: createdBarcodesCount > 0 ? `${createdBarcodesCount} Barcodes Generated.` : '',
+        variant: 'success' 
+      });
 
+      fetchData();
     } catch (e: any) {
       toast({ title: 'Error saving purchase invoice', description: e.message, variant: 'destructive' });
     } finally {
@@ -509,6 +543,11 @@ export default function PurchaseTransactionPage() {
       } else {
         setOtherExpenses([{ exp_name: 'Expenses A/c', amount: 0 }, { exp_name: 'Freight Charges', amount: 0 }]);
       }
+
+      // Fetch barcodes for invoice if available
+      if (inv.pm_bill_ref_no) {
+        fetchBarcodesForInvoice(inv.pm_bill_ref_no);
+      }
     } catch (e) {
       toast({ title: 'Error loading invoice details', variant: 'destructive' });
     } finally {
@@ -532,16 +571,19 @@ export default function PurchaseTransactionPage() {
     setRoundOff(0);
     setItems([{ sno: 1, prd_name: '', qty: 0, unit: 'NOS', rate: 0, amount: 0, disc_perc: 0, disc_amt: 0, expenses: 0, gst_perc: 0, txbl_rate: 0, net_rate: 0, hsn_code: '' }]);
     setOtherExpenses([{ exp_name: 'Expenses A/c', amount: 0 }, { exp_name: 'Freight Charges', amount: 0 }]);
+    setGeneratedBarcodes([]);
+    setShowBarcodeModal(false);
     
     if (invoices.length > 0) {
       setRefNo(invoices[0].pm_ref_no + 1);
     }
   };
 
-  // Navigation handlers
+  // Fixed Navigation handlers
   const handlePrev = () => {
     if (invoices.length === 0) return;
-    const nextIdx = currentIndex + 1 < invoices.length ? currentIndex + 1 : invoices.length - 1;
+    let nextIdx = currentIndex === -1 ? 0 : currentIndex + 1;
+    if (nextIdx >= invoices.length) nextIdx = invoices.length - 1;
     setCurrentIndex(nextIdx);
     setMode('view');
     loadInvoiceIntoForm(invoices[nextIdx]);
@@ -549,7 +591,7 @@ export default function PurchaseTransactionPage() {
 
   const handleNext = () => {
     if (invoices.length === 0) return;
-    const nextIdx = currentIndex - 1 >= 0 ? currentIndex - 1 : 0;
+    let nextIdx = currentIndex <= 0 ? 0 : currentIndex - 1;
     setCurrentIndex(nextIdx);
     setMode('view');
     loadInvoiceIntoForm(invoices[nextIdx]);
@@ -991,8 +1033,13 @@ export default function PurchaseTransactionPage() {
           >
             {loading ? 'Saving...' : 'Save [F10]'}
           </Button>
-          <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => window.print()}>
-            Print [F11]
+          <Button 
+            size="sm" 
+            variant="outline" 
+            className="h-8 text-xs bg-emerald-600 text-white hover:bg-emerald-700" 
+            onClick={() => router.push('/inventory/barcode')}
+          >
+            Print Barcodes
           </Button>
           <Button size="sm" variant="outline" className="h-8 text-xs text-red-600" onClick={handleResetForm}>
             Cancel
@@ -1014,6 +1061,73 @@ export default function PurchaseTransactionPage() {
         onClose={() => setIsStockModalOpen(false)}
         onProceed={handleProceedStockItems}
       />
+
+      {/* Generated Barcodes Modal Dialog */}
+      {showBarcodeModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
+          <div className="bg-background w-full max-w-4xl rounded-lg shadow-2xl border overflow-hidden flex flex-col max-h-[85vh]">
+            <div className="bg-emerald-600 text-white font-bold px-4 py-2 flex justify-between items-center text-sm">
+              <span>Barcodes Generated for Invoice #{invoiceNo || refNo}</span>
+              <button onClick={() => setShowBarcodeModal(false)} className="hover:bg-emerald-700 px-2 py-0.5 rounded">✕</button>
+            </div>
+            
+            <div className="p-4 space-y-3 flex-1 overflow-auto">
+              <div className="flex justify-between items-center text-xs">
+                <span className="font-semibold text-emerald-700 dark:text-emerald-300">
+                  Total Barcode Stickers Generated: {generatedBarcodes.length}
+                </span>
+                <Button 
+                  size="sm" 
+                  className="h-7 text-xs bg-amber-600 hover:bg-amber-700 text-white"
+                  onClick={() => {
+                    setShowBarcodeModal(false);
+                    router.push('/inventory/barcode');
+                  }}
+                >
+                  Open Barcode Printing Screen →
+                </Button>
+              </div>
+
+              <Table className="border rounded">
+                <TableHeader className="bg-muted text-xs">
+                  <TableRow>
+                    <TableHead>SNo</TableHead>
+                    <TableHead>Barcode No (Batch)</TableHead>
+                    <TableHead>Product Name</TableHead>
+                    <TableHead className="text-center">Qty</TableHead>
+                    <TableHead className="text-right">Purchase Rate</TableHead>
+                    <TableHead className="text-right">Sales Price</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody className="text-xs">
+                  {generatedBarcodes.map((b, idx) => (
+                    <TableRow key={idx}>
+                      <TableCell className="font-mono">{idx + 1}</TableCell>
+                      <TableCell className="font-mono font-bold text-amber-600 dark:text-amber-400">{b.bar_no}</TableCell>
+                      <TableCell className="font-medium">{b.product?.prd_name || 'Stock Item'}</TableCell>
+                      <TableCell className="text-center font-mono font-bold text-emerald-600">{b.qty}</TableCell>
+                      <TableCell className="text-right font-mono">₹{(b.pc_pur_rate || 0).toFixed(2)}</TableCell>
+                      <TableCell className="text-right font-mono">₹{(b.pc_sale_rate || 0).toFixed(2)}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+
+            <div className="bg-muted/40 p-2 border-t flex justify-end gap-2 text-xs">
+              <Button size="sm" variant="outline" onClick={() => setShowBarcodeModal(false)}>
+                Close
+              </Button>
+              <Button size="sm" className="bg-emerald-600 text-white hover:bg-emerald-700" onClick={() => {
+                setShowBarcodeModal(false);
+                router.push('/inventory/barcode');
+              }}>
+                Go to Barcode Printing Screen
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
