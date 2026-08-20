@@ -754,8 +754,8 @@ export default function PurchaseTransactionPage() {
                   <TableHead className="w-20 text-right p-1">DiscAmt</TableHead>
                   <TableHead className="w-20 text-right p-1">Expenses</TableHead>
                   <TableHead className="w-16 min-w-[65px] text-center p-1">{taxCode === 'INTERSTATE' ? 'IGST %' : 'GST %'}</TableHead>
-                  <TableHead className="w-20 text-right p-1">Txbl.Rate</TableHead>
-                  <TableHead className="w-20 text-right p-1">Net Rate</TableHead>
+                  <TableHead className="w-28 min-w-[100px] text-right p-1">Txbl.Rate</TableHead>
+                  <TableHead className="w-28 min-w-[100px] text-right p-1">Net Rate</TableHead>
                   <TableHead className="w-24 min-w-[90px] p-1">HSN_Code</TableHead>
                 </TableRow>
               </TableHeader>
@@ -829,7 +829,7 @@ export default function PurchaseTransactionPage() {
                         type="number"
                         value={row.disc_perc || ''}
                         onChange={e => updateRow(idx, 'disc_perc', e.target.value)}
-                        className="h-7 text-xs text-right font-mono bg-background px-1"
+                        className="h-7 text-xs text-right font-mono px-1"
                       />
                     </TableCell>
                     <TableCell className="text-right font-mono p-1">
@@ -840,7 +840,7 @@ export default function PurchaseTransactionPage() {
                         type="number"
                         value={row.expenses || ''}
                         onChange={e => updateRow(idx, 'expenses', e.target.value)}
-                        className="h-7 text-xs text-right font-mono bg-background px-1"
+                        className="h-7 text-xs text-right font-mono px-1"
                       />
                     </TableCell>
                     <TableCell className="p-1 min-w-[65px]">
@@ -848,14 +848,14 @@ export default function PurchaseTransactionPage() {
                         type="number"
                         value={row.gst_perc || ''}
                         onChange={e => updateRow(idx, 'gst_perc', e.target.value)}
-                        className="h-7 text-xs text-center font-mono font-bold bg-background px-1"
+                        className="h-7 text-xs text-center font-mono font-bold px-1"
                       />
                     </TableCell>
-                    <TableCell className="text-right font-mono p-1">
-                      {(row.txbl_rate || 0).toFixed(2)}
+                    <TableCell className="text-right font-mono font-medium p-1 min-w-[100px] px-2">
+                      ₹{(row.txbl_rate || 0).toFixed(2)}
                     </TableCell>
-                    <TableCell className="text-right font-mono font-semibold p-1">
-                      {(row.net_rate || 0).toFixed(2)}
+                    <TableCell className="text-right font-mono font-bold text-emerald-700 dark:text-emerald-400 p-1 min-w-[100px] px-2">
+                      ₹{(row.net_rate || 0).toFixed(2)}
                     </TableCell>
                     <TableCell className="p-1 min-w-[90px]">
                       <Input
