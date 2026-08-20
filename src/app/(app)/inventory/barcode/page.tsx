@@ -33,21 +33,20 @@ function BarcodePrintingContent() {
   const [showAllProducts, setShowAllProducts] = useState(false);
   const [search, setSearch] = useState('');
 
-  // Fetch Barcodes & Invoice Details
+  // Fetch Barcodes & Invoice Details with On-The-Fly Auto Generation fallback
   const fetchBarcodes = useCallback(async () => {
     if (!company?.frm_code) return;
     setLoading(true);
     try {
-      // 1. Fetch available invoices for dropdown
+      // 1. Fetch available purchase invoices for selector
       const { data: invData } = await supabase
         .from('pur_mast')
-        .select('pm_ref_no, pm_bill_ref_no, pm_bill_date, pm_tot_qty')
+        .select('pm_ref_no, pm_rec_no, pm_bill_ref_no, pm_bill_date, pm_tot_qty, pm_cr_code')
         .eq('pm_frm_code', company.frm_code)
         .order('pm_ref_no', { ascending: false });
 
       setInvoicesList(invData || []);
 
-      // Determine target invoice number
       const targetInv = selectedInvNo || (invData && invData.length > 0 ? (invData[0].pm_bill_ref_no || String(invData[0].pm_ref_no)) : '');
       if (!selectedInvNo && targetInv) {
         setSelectedInvNo(targetInv);
@@ -64,15 +63,132 @@ function BarcodePrintingContent() {
         query = query.eq('inv_no', targetInv);
       }
 
-      const { data: barData, error } = await query;
+      let { data: barData, error } = await query;
       if (error) throw error;
 
-      const barList = barData || [];
+      let barList = barData || [];
+
+      // 3. ON-THE-FLY AUTO BARCODE GENERATION IF NO BARCODES EXIST YET FOR THIS INVOICE
+      if (barList.length === 0 && targetInv && !showAllProducts) {
+        const matchingMast = invData?.find(i => 
+          String(i.pm_bill_ref_no) === String(targetInv) || 
+          String(i.pm_ref_no) === String(targetInv) ||
+          String(i.pm_rec_no) === String(targetInv)
+        );
+
+        if (matchingMast) {
+          // Fetch pur_child items for this invoice
+          const { data: childItems } = await supabase
+            .from('pur_child')
+            .select('*, product(ref_no, prd_code, barcode_gen_type, sales_price, rate, product_group(grp_name))')
+            .eq('pm_ref_no', matchingMast.pm_ref_no);
+
+          if (childItems && childItems.length > 0) {
+            // Fetch barcode setting sequence
+            const { data: settingData } = await supabase
+              .from('barcode_setting')
+              .select('*')
+              .or(`frm_code.eq.${company.frm_code},frm_code.is.null`)
+              .order('ref_no', { ascending: true })
+              .limit(1)
+              .single();
+
+            const barRule = settingData || { prefix: 'KS', seed: 2304, seed_len: 5, suffix: '' };
+            let currentSeed = barRule.seed || 2304;
+            const prefix = barRule.prefix || 'KS';
+            const suffix = barRule.suffix || '';
+            const seedLen = barRule.seed_len || 5;
+
+            const newBarEntries: any[] = [];
+
+            childItems.forEach((cItem: any, idx: number) => {
+              const genType = cItem.product?.barcode_gen_type || 'Auto Tracking Batch No';
+              const pRate = cItem.pc_pur_rate || 0;
+              const saleRate = cItem.product?.sales_price || pRate;
+              const costRate = cItem.pc_txbl_rate || pRate;
+              const markup = costRate > 0 && saleRate > costRate ? Number((((saleRate - costRate) / costRate) * 100).toFixed(1)) : 0;
+              const margin = saleRate > 0 ? Number((((saleRate - costRate) / saleRate) * 100).toFixed(2)) : 0;
+
+              if (genType === 'Auto Tracking Unique No') {
+                const unitQty = Math.max(1, Math.floor(cItem.pc_qty || 1));
+                for (let u = 0; u < unitQty; u++) {
+                  const barNo = `${prefix}${String(currentSeed).padStart(seedLen, '0')}${suffix}`;
+                  newBarEntries.push({
+                    bar_no: barNo,
+                    prcode: cItem.pc_prcode || null,
+                    pc_pur_rate: pRate,
+                    pc_sale_rate: saleRate,
+                    qty: 1,
+                    cr_code: matchingMast.pm_cr_code,
+                    sold_status: 'A',
+                    frm_code: company.frm_code,
+                    inv_no: targetInv,
+                    inv_date: matchingMast.pm_bill_date,
+                    entry_sno: cItem.pc_sno || (idx + 1),
+                    cost_rate: costRate,
+                    markup: markup,
+                    margin: margin,
+                    print_count: 1,
+                    grp_name: cItem.product?.product_group?.grp_name || '',
+                    unit_name: cItem.pc_unit || 'NOS'
+                  });
+                  currentSeed++;
+                }
+              } else {
+                const barNo = `${prefix}${String(currentSeed).padStart(seedLen, '0')}${suffix}`;
+                newBarEntries.push({
+                  bar_no: barNo,
+                  prcode: cItem.pc_prcode || null,
+                  pc_pur_rate: pRate,
+                  pc_sale_rate: saleRate,
+                  qty: cItem.pc_qty || 1,
+                  cr_code: matchingMast.pm_cr_code,
+                  sold_status: 'A',
+                  frm_code: company.frm_code,
+                  inv_no: targetInv,
+                  inv_date: matchingMast.pm_bill_date,
+                  entry_sno: cItem.pc_sno || (idx + 1),
+                  cost_rate: costRate,
+                  markup: markup,
+                  margin: margin,
+                  print_count: 1,
+                  grp_name: cItem.product?.product_group?.grp_name || '',
+                  unit_name: cItem.pc_unit || 'NOS'
+                });
+                currentSeed++;
+              }
+            });
+
+            if (newBarEntries.length > 0) {
+              await supabase.from('bar_temp').insert(newBarEntries);
+              if (barRule.ref_no) {
+                await supabase.from('barcode_setting').update({ seed: currentSeed }).eq('ref_no', barRule.ref_no);
+              }
+
+              // Re-fetch generated barcodes
+              const { data: refetchedBars } = await supabase
+                .from('bar_temp')
+                .select('*, product(prd_code, prd_name, sales_price, rate, hsn_code, units, product_group(grp_name))')
+                .eq('frm_code', company.frm_code)
+                .eq('inv_no', targetInv)
+                .order('bar_ref_id', { ascending: false });
+
+              barList = refetchedBars || [];
+            }
+          }
+        }
+      }
+
       setRecords(barList);
       setSelectedIds(new Set(barList.map(r => r.bar_ref_id)));
 
-      // 3. Find invoice summary info
-      const matchingInv = invData?.find(i => String(i.pm_bill_ref_no) === String(targetInv) || String(i.pm_ref_no) === String(targetInv));
+      // 4. Update Header Summary Badges
+      const matchingInv = invData?.find(i => 
+        String(i.pm_bill_ref_no) === String(targetInv) || 
+        String(i.pm_ref_no) === String(targetInv) ||
+        String(i.pm_rec_no) === String(targetInv)
+      );
+
       if (matchingInv) {
         setActiveInvoiceInfo({
           invNo: matchingInv.pm_bill_ref_no || matchingInv.pm_ref_no,
@@ -166,7 +282,7 @@ function BarcodePrintingContent() {
         </div>
         <button 
           onClick={handleCloseForm}
-          className="text-sm cursor-pointer hover:bg-amber-600 px-2 py-0.5 rounded transition"
+          className="text-sm cursor-pointer hover:bg-amber-600 px-2 py-0.5 rounded transition font-bold"
           title="Close & Return to Purchase Entry"
         >
           ✕
@@ -216,7 +332,7 @@ function BarcodePrintingContent() {
           </div>
         </div>
 
-        <Button size="sm" variant="outline" className="h-7 text-xs" onClick={handleCloseForm}>
+        <Button size="sm" variant="outline" className="h-7 text-xs font-bold" onClick={handleCloseForm}>
           ← Back to Purchase Entry
         </Button>
       </div>
