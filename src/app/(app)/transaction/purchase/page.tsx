@@ -399,7 +399,7 @@ function PurchaseTransactionContent() {
     setItems(updated);
   };
 
-  // Enter Key Focus Movement Helper across Grid Inputs
+  // Enter Key Focus Movement Helper across Grid Inputs with Focus Highlight
   const handleGridInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement | HTMLSelectElement>) => {
     if (e.key === 'Enter') {
       e.preventDefault();
@@ -803,6 +803,9 @@ function PurchaseTransactionContent() {
     loadInvoiceIntoForm(invoices[nextIdx]);
   };
 
+  // Re-usable input focus highlight style
+  const focusHighlightClass = "focus:bg-yellow-200 focus:text-slate-950 focus:ring-2 focus:ring-amber-500 focus:border-amber-600 transition-colors font-bold";
+
   return (
     <div className="min-h-screen bg-slate-100 dark:bg-slate-900 p-3 space-y-3 font-sans text-xs">
       {/* Top Banner Header */}
@@ -837,10 +840,9 @@ function PurchaseTransactionContent() {
                 if (e.key === 'Enter') {
                   e.preventDefault();
                   invoiceDateRef.current?.focus();
-                  invoiceDateRef.current?.select();
                 }
               }}
-              className="grid-input h-6 text-xs bg-background border border-input rounded px-2 max-w-[120px] font-mono text-right font-bold focus:outline-none"
+              className={`grid-input h-6 text-xs bg-background border border-input rounded px-2 max-w-[120px] font-mono text-right font-bold focus:outline-none ${focusHighlightClass}`}
               placeholder="Inv No"
             />
           </div>
@@ -863,7 +865,7 @@ function PurchaseTransactionContent() {
                   billTypeRef.current?.focus();
                 }
               }}
-              className="grid-input h-6 text-xs bg-background border border-input rounded px-2 max-w-[130px] font-mono focus:outline-none"
+              className={`grid-input h-6 text-xs bg-background border border-input rounded px-2 max-w-[130px] font-mono focus:outline-none ${focusHighlightClass}`}
             />
           </div>
 
@@ -871,13 +873,15 @@ function PurchaseTransactionContent() {
             <span className="text-muted-foreground">Bill Type</span>
             <select 
               ref={billTypeRef}
-              className="grid-input flex h-6 rounded border border-input bg-background px-2 text-xs font-bold focus:outline-none"
+              className={`grid-input flex h-6 rounded border border-input bg-background px-2 text-xs font-bold focus:outline-none ${focusHighlightClass}`}
               value={billType}
               onChange={e => setBillType(e.target.value)}
               onKeyDown={e => {
                 if (e.key === 'Enter') {
                   e.preventDefault();
-                  vendorSelectRef.current?.focus();
+                  setTimeout(() => {
+                    vendorSelectRef.current?.focus();
+                  }, 50);
                 }
               }}
             >
@@ -900,7 +904,7 @@ function PurchaseTransactionContent() {
                 <Label className="w-24 text-xs font-bold">Account Name</Label>
                 <select 
                   ref={vendorSelectRef}
-                  className="grid-input flex-1 h-7 rounded border border-input bg-background px-2 text-xs font-bold focus:outline-none"
+                  className={`grid-input flex-1 h-7 rounded border border-input bg-background px-2 text-xs font-bold focus:outline-none ${focusHighlightClass}`}
                   value={selectedVendorId}
                   onChange={e => handleVendorSelect(e.target.value)}
                   onKeyDown={e => {
@@ -911,7 +915,6 @@ function PurchaseTransactionContent() {
                         setIsProductModalOpen(true);
                       } else {
                         firstProdInputRef.current?.focus();
-                        firstProdInputRef.current?.select();
                       }
                     }
                   }}
@@ -942,7 +945,7 @@ function PurchaseTransactionContent() {
               <div className="flex items-center gap-2">
                 <Label className="w-24 text-xs font-bold">Tax Code [F6]</Label>
                 <select 
-                  className="grid-input flex-1 h-7 rounded border border-input bg-background px-2 text-xs font-bold focus:outline-none"
+                  className={`grid-input flex-1 h-7 rounded border border-input bg-background px-2 text-xs font-bold focus:outline-none ${focusHighlightClass}`}
                   value={taxCode}
                   onChange={e => setTaxCode(e.target.value)}
                 >
@@ -1029,7 +1032,7 @@ function PurchaseTransactionContent() {
                           }}
                           onKeyDown={handleGridInputKeyDown}
                           placeholder="Select Product (F3)..."
-                          className="grid-input h-7 w-full text-xs bg-background border border-input rounded px-2 font-medium focus:outline-none"
+                          className={`grid-input h-7 w-full text-xs bg-background border border-input rounded px-2 font-medium focus:outline-none ${focusHighlightClass}`}
                         />
                         <Button 
                           type="button" 
@@ -1051,7 +1054,7 @@ function PurchaseTransactionContent() {
                         value={row.qty || ''}
                         onChange={e => updateRow(idx, 'qty', e.target.value)}
                         onKeyDown={handleGridInputKeyDown}
-                        className="grid-input h-7 w-full text-xs text-right font-mono font-bold bg-background border border-input rounded px-1.5 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                        className={`grid-input h-7 w-full text-xs text-right font-mono font-bold bg-background border border-input rounded px-1.5 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${focusHighlightClass}`}
                       />
                     </TableCell>
                     <TableCell className="p-1 min-w-[65px]">
@@ -1060,7 +1063,7 @@ function PurchaseTransactionContent() {
                         value={row.unit || 'NOS'}
                         onChange={e => updateRow(idx, 'unit', e.target.value)}
                         onKeyDown={handleGridInputKeyDown}
-                        className="grid-input h-7 w-full text-xs bg-background border border-input rounded px-1.5 focus:outline-none"
+                        className={`grid-input h-7 w-full text-xs bg-background border border-input rounded px-1.5 focus:outline-none ${focusHighlightClass}`}
                       />
                     </TableCell>
                     <TableCell className="p-1 min-w-[90px]">
@@ -1069,7 +1072,7 @@ function PurchaseTransactionContent() {
                         value={row.rate || ''}
                         onChange={e => updateRow(idx, 'rate', e.target.value)}
                         onKeyDown={handleGridInputKeyDown}
-                        className="grid-input h-7 w-full text-xs text-right font-mono bg-background border border-input rounded px-1.5 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                        className={`grid-input h-7 w-full text-xs text-right font-mono bg-background border border-input rounded px-1.5 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${focusHighlightClass}`}
                       />
                     </TableCell>
                     <TableCell className="text-right font-mono font-bold p-1">
@@ -1081,7 +1084,7 @@ function PurchaseTransactionContent() {
                         value={row.disc_perc || ''}
                         onChange={e => updateRow(idx, 'disc_perc', e.target.value)}
                         onKeyDown={handleGridInputKeyDown}
-                        className="grid-input h-7 w-full text-xs text-right font-mono border border-input rounded px-1.5 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                        className={`grid-input h-7 w-full text-xs text-right font-mono border border-input rounded px-1.5 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${focusHighlightClass}`}
                       />
                     </TableCell>
                     <TableCell className="p-1">
@@ -1090,7 +1093,7 @@ function PurchaseTransactionContent() {
                         value={row.disc_amt || ''}
                         onChange={e => updateRow(idx, 'disc_amt', e.target.value)}
                         onKeyDown={handleGridInputKeyDown}
-                        className="grid-input h-7 w-full text-xs text-right font-mono border border-input rounded px-1.5 font-semibold focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                        className={`grid-input h-7 w-full text-xs text-right font-mono border border-input rounded px-1.5 font-semibold focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${focusHighlightClass}`}
                       />
                     </TableCell>
                     <TableCell className="p-1">
@@ -1099,7 +1102,7 @@ function PurchaseTransactionContent() {
                         value={row.expenses || ''}
                         onChange={e => updateRow(idx, 'expenses', e.target.value)}
                         onKeyDown={handleGridInputKeyDown}
-                        className="grid-input h-7 w-full text-xs text-right font-mono border border-input rounded px-1.5 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                        className={`grid-input h-7 w-full text-xs text-right font-mono border border-input rounded px-1.5 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${focusHighlightClass}`}
                       />
                     </TableCell>
                     <TableCell className="p-1 min-w-[65px]">
@@ -1108,7 +1111,7 @@ function PurchaseTransactionContent() {
                         value={row.gst_perc || ''}
                         onChange={e => updateRow(idx, 'gst_perc', e.target.value)}
                         onKeyDown={handleGridInputKeyDown}
-                        className="grid-input h-7 w-full text-xs text-center font-mono font-bold border border-input rounded px-1.5 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                        className={`grid-input h-7 w-full text-xs text-center font-mono font-bold border border-input rounded px-1.5 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${focusHighlightClass}`}
                       />
                     </TableCell>
                     <TableCell className="text-right font-mono font-medium p-1 min-w-[100px] px-2">
@@ -1123,7 +1126,7 @@ function PurchaseTransactionContent() {
                         value={row.hsn_code || ''}
                         onChange={e => updateRow(idx, 'hsn_code', e.target.value)}
                         onKeyDown={handleGridInputKeyDown}
-                        className="grid-input h-7 w-full text-xs font-mono bg-background border border-input rounded px-1.5 focus:outline-none"
+                        className={`grid-input h-7 w-full text-xs font-mono bg-background border border-input rounded px-1.5 focus:outline-none ${focusHighlightClass}`}
                       />
                     </TableCell>
                   </TableRow>
@@ -1163,7 +1166,7 @@ function PurchaseTransactionContent() {
                 type="text"
                 value={cashDisc || ''}
                 onChange={e => setCashDisc(parseFloat(e.target.value) || 0)}
-                className="h-6 w-24 text-xs text-right font-mono border border-input rounded px-1.5 font-bold focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                className={`h-6 w-24 text-xs text-right font-mono border border-input rounded px-1.5 font-bold focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${focusHighlightClass}`}
               />
             </div>
             <div className="flex justify-between items-center">
@@ -1172,7 +1175,7 @@ function PurchaseTransactionContent() {
                 type="text"
                 value={splDisc || ''}
                 onChange={e => setSplDisc(parseFloat(e.target.value) || 0)}
-                className="h-6 w-24 text-xs text-right font-mono border border-input rounded px-1.5 font-bold focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                className={`h-6 w-24 text-xs text-right font-mono border border-input rounded px-1.5 font-bold focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${focusHighlightClass}`}
               />
             </div>
             <div className="flex justify-between items-center border-t pt-1 font-bold">
@@ -1193,7 +1196,7 @@ function PurchaseTransactionContent() {
                 type="text"
                 value={tdsAmt || ''}
                 onChange={e => setTdsAmt(parseFloat(e.target.value) || 0)}
-                className="h-6 w-24 text-xs text-right font-mono border border-input rounded px-1.5 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                className={`h-6 w-24 text-xs text-right font-mono border border-input rounded px-1.5 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${focusHighlightClass}`}
               />
             </div>
           </div>
@@ -1215,7 +1218,7 @@ function PurchaseTransactionContent() {
                     copy[eIdx].amount = parseFloat(e.target.value) || 0;
                     setOtherExpenses(copy);
                   }}
-                  className="h-6 w-24 text-xs text-right font-mono border border-input rounded px-1.5 font-bold focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                  className={`h-6 w-24 text-xs text-right font-mono border border-input rounded px-1.5 font-bold focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${focusHighlightClass}`}
                 />
               </div>
             ))}
@@ -1233,7 +1236,7 @@ function PurchaseTransactionContent() {
                 type="text"
                 value={roundOff || ''}
                 onChange={e => setRoundOff(parseFloat(e.target.value) || 0)}
-                className="h-6 w-20 text-xs text-right font-mono border border-input rounded px-1.5 font-bold focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                className={`h-6 w-20 text-xs text-right font-mono border border-input rounded px-1.5 font-bold focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${focusHighlightClass}`}
               />
             </div>
 
@@ -1254,7 +1257,7 @@ function PurchaseTransactionContent() {
             value={remarks}
             onChange={e => setRemarks(e.target.value)}
             placeholder="Bill No, Date, Qty auto fill..."
-            className="h-8 text-xs bg-background flex-1 font-mono"
+            className={`h-8 text-xs bg-background flex-1 font-mono ${focusHighlightClass}`}
           />
           <Button 
             type="button" 

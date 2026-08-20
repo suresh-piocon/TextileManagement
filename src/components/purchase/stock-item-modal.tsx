@@ -299,7 +299,7 @@ export function StockItemModal({ isOpen, product, onClose, onProceed }: StockIte
                       value={row.qty || ''}
                       onChange={e => updateRow(idx, 'qty', e.target.value)}
                       onKeyDown={e => handleCellKeyDown(idx, 'qty', e)}
-                      className="h-7 w-full rounded border border-input text-xs text-right font-mono bg-cyan-400 dark:bg-cyan-600 text-slate-950 font-bold focus:bg-cyan-300 px-1.5 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                      className="h-7 w-full rounded border border-input text-xs text-right font-mono bg-cyan-400 dark:bg-cyan-600 text-slate-950 font-bold focus:bg-cyan-300 px-1.5 focus:bg-yellow-200 focus:text-slate-950 focus:ring-2 focus:ring-amber-500 focus:border-amber-600 transition-colors [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                     />
                   </TableCell>
                   <TableCell className="p-1">
@@ -309,7 +309,7 @@ export function StockItemModal({ isOpen, product, onClose, onProceed }: StockIte
                       value={row.p_rate || ''}
                       onChange={e => updateRow(idx, 'p_rate', e.target.value)}
                       onKeyDown={e => handleCellKeyDown(idx, 'p_rate', e)}
-                      className="h-7 w-full rounded border border-input text-xs text-right font-mono bg-background px-1.5 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                      className="h-7 w-full rounded border border-input text-xs text-right font-mono bg-background px-1.5 focus:bg-yellow-200 focus:text-slate-950 focus:ring-2 focus:ring-amber-500 focus:border-amber-600 transition-colors [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                     />
                   </TableCell>
                   <TableCell className="p-1">
@@ -319,7 +319,7 @@ export function StockItemModal({ isOpen, product, onClose, onProceed }: StockIte
                       value={row.disc_perc || ''}
                       onChange={e => updateRow(idx, 'disc_perc', e.target.value)}
                       onKeyDown={e => handleCellKeyDown(idx, 'disc_perc', e)}
-                      className="h-7 w-full rounded border border-input text-xs text-right font-mono bg-background px-1.5 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                      className="h-7 w-full rounded border border-input text-xs text-right font-mono bg-background px-1.5 focus:bg-yellow-200 focus:text-slate-950 focus:ring-2 focus:ring-amber-500 focus:border-amber-600 transition-colors [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                     />
                   </TableCell>
                   <TableCell className="text-right font-mono font-bold p-1">
@@ -335,7 +335,7 @@ export function StockItemModal({ isOpen, product, onClose, onProceed }: StockIte
                       value={row.markup || ''}
                       onChange={e => updateRow(idx, 'markup', e.target.value)}
                       onKeyDown={e => handleCellKeyDown(idx, 'markup', e)}
-                      className="h-7 w-full rounded border border-input text-xs text-right font-mono bg-background px-1.5 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                      className="h-7 w-full rounded border border-input text-xs text-right font-mono bg-background px-1.5 focus:bg-yellow-200 focus:text-slate-950 focus:ring-2 focus:ring-amber-500 focus:border-amber-600 transition-colors [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                     />
                   </TableCell>
                   <TableCell className="p-1">
