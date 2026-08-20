@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { useApp } from '@/hooks/use-app';
 import { Input } from '@/components/ui/input';
@@ -29,6 +29,8 @@ export function ProductLookupModal({ isOpen, onClose, onSelectProduct }: Product
   const [groups, setGroups] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(0);
+
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
 
   const fetchGroups = useCallback(async () => {
     if (!company?.frm_code) return;
@@ -77,8 +79,37 @@ export function ProductLookupModal({ isOpen, onClose, onSelectProduct }: Product
     if (isOpen) {
       fetchGroups();
       searchProducts();
+      setTimeout(() => {
+        searchInputRef.current?.focus();
+        searchInputRef.current?.select();
+      }, 50);
     }
   }, [isOpen, fetchGroups, searchProducts]);
+
+  // Up/Down Arrow & Enter Key Navigation
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setSelectedIndex(prev => (prev < products.length - 1 ? prev + 1 : prev));
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setSelectedIndex(prev => (prev > 0 ? prev - 1 : 0));
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        if (products.length > 0 && products[selectedIndex]) {
+          onSelectProduct(products[selectedIndex]);
+          onClose();
+        }
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, products, selectedIndex, onSelectProduct, onClose]);
 
   if (!isOpen) return null;
 
@@ -88,26 +119,26 @@ export function ProductLookupModal({ isOpen, onClose, onSelectProduct }: Product
         {/* Title Bar */}
         <div className="bg-amber-500 text-white font-bold px-4 py-2 flex justify-between items-center text-sm">
           <span>Add New Mode - Product Selection</span>
-          <button onClick={onClose} className="hover:bg-amber-600 px-2 py-0.5 rounded">✕</button>
+          <button onClick={onClose} className="hover:bg-amber-600 px-2 py-0.5 rounded font-bold">✕</button>
         </div>
 
         {/* Filter Controls Bar */}
         <div className="p-4 bg-muted/30 border-b space-y-3">
           <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-xs">
             <div className="col-span-2">
-              <Label className="text-xs">Prod. Name [F3]</Label>
+              <Label className="text-xs font-bold">Prod. Name [F3]</Label>
               <Input
+                ref={searchInputRef}
                 value={prodNameSearch}
                 onChange={e => setProdNameSearch(e.target.value)}
                 placeholder="Search Product Name (e.g. saree)..."
-                className="h-8 text-xs bg-background"
-                autoFocus
+                className="h-8 text-xs bg-background font-medium"
               />
             </div>
             <div>
-              <Label className="text-xs">Group Name [F3]</Label>
+              <Label className="text-xs font-bold">Group Name [F3]</Label>
               <select
-                className="flex h-8 w-full rounded-md border border-input bg-background px-2 py-1 text-xs"
+                className="flex h-8 w-full rounded-md border border-input bg-background px-2 py-1 text-xs font-semibold"
                 value={selectedGroup}
                 onChange={e => setSelectedGroup(e.target.value)}
               >
@@ -118,7 +149,7 @@ export function ProductLookupModal({ isOpen, onClose, onSelectProduct }: Product
               </select>
             </div>
             <div>
-              <Label className="text-xs">Brand</Label>
+              <Label className="text-xs font-bold">Brand</Label>
               <Input
                 value={brandSearch}
                 onChange={e => setBrandSearch(e.target.value)}
@@ -129,7 +160,7 @@ export function ProductLookupModal({ isOpen, onClose, onSelectProduct }: Product
           </div>
 
           <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
-            <div className="flex items-center gap-4">
+            <div className="flex items-center gap-4 font-medium">
               <label className="flex items-center gap-1 cursor-pointer">
                 <input
                   type="checkbox"
@@ -149,7 +180,7 @@ export function ProductLookupModal({ isOpen, onClose, onSelectProduct }: Product
             </div>
 
             <div className="flex gap-2">
-              <Button size="sm" className="h-7 text-xs bg-amber-600 hover:bg-amber-700" onClick={() => {
+              <Button size="sm" className="h-7 text-xs bg-amber-600 hover:bg-amber-700 font-bold" onClick={() => {
                 if (products[selectedIndex]) {
                   onSelectProduct(products[selectedIndex]);
                   onClose();
@@ -167,13 +198,13 @@ export function ProductLookupModal({ isOpen, onClose, onSelectProduct }: Product
         {/* Product Table */}
         <div className="flex-1 overflow-auto p-2 min-h-[300px]">
           <Table>
-            <TableHeader className="bg-muted text-xs">
+            <TableHeader className="bg-slate-200 dark:bg-slate-800 text-xs font-bold">
               <TableRow>
-                <TableHead className="py-2 text-xs">Product Name</TableHead>
-                <TableHead className="py-2 text-xs">Product Code</TableHead>
-                <TableHead className="py-2 text-xs">Unit</TableHead>
-                <TableHead className="py-2 text-xs text-center">GST%</TableHead>
-                <TableHead className="py-2 text-xs">HSN Code</TableHead>
+                <TableHead className="py-2 text-xs font-bold">Product Name</TableHead>
+                <TableHead className="py-2 text-xs font-bold">Product Code</TableHead>
+                <TableHead className="py-2 text-xs font-bold">Unit</TableHead>
+                <TableHead className="py-2 text-xs text-center font-bold">GST%</TableHead>
+                <TableHead className="py-2 text-xs font-bold">HSN Code</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody className="text-xs">
@@ -193,13 +224,15 @@ export function ProductLookupModal({ isOpen, onClose, onSelectProduct }: Product
                         onClose();
                       }}
                       className={`cursor-pointer transition-colors ${
-                        isSelected ? 'bg-amber-500 text-white hover:bg-amber-500 font-semibold' : 'hover:bg-muted/50'
+                        isSelected 
+                          ? 'bg-amber-500 text-white font-bold hover:bg-amber-600' 
+                          : 'hover:bg-muted/50'
                       }`}
                     >
                       <TableCell className="py-1.5 font-medium">{p.prd_name}</TableCell>
                       <TableCell className="py-1.5 font-mono">{p.prd_code || '-'}</TableCell>
                       <TableCell className="py-1.5">{p.units || 'NOS'}</TableCell>
-                      <TableCell className="py-1.5 text-center font-mono">{p.gst_perc || 0}%</TableCell>
+                      <TableCell className="py-1.5 text-center font-bold">{p.gst_perc || 0}%</TableCell>
                       <TableCell className="py-1.5 font-mono">{p.hsn_code || '-'}</TableCell>
                     </TableRow>
                   );
@@ -209,12 +242,9 @@ export function ProductLookupModal({ isOpen, onClose, onSelectProduct }: Product
           </Table>
         </div>
 
-        {/* Footer Bar */}
-        <div className="bg-muted/40 p-2 border-t text-xs flex justify-between items-center text-muted-foreground">
-          <div>
-            Double click or press <kbd className="px-1 border rounded bg-background font-mono">Select [F5]</kbd> to enter stock item details.
-          </div>
-          <div>Total Products: {products.length}</div>
+        <div className="bg-muted/30 px-4 py-2 border-t text-[11px] text-muted-foreground flex justify-between items-center">
+          <span>Use <b>↑ / ↓ Arrow Keys</b> to highlight item, press <b>Enter</b> or <b>Select [F5]</b> to choose.</span>
+          <span>Total Products: {products.length}</span>
         </div>
       </div>
     </div>

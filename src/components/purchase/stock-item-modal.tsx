@@ -1,7 +1,6 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/components/ui/table';
 
@@ -31,6 +30,10 @@ export function StockItemModal({ isOpen, product, onClose, onProceed }: StockIte
 
   const targetQtyRef = useRef<HTMLInputElement | null>(null);
   const rowQtyRefs = useRef<(HTMLInputElement | null)[]>([]);
+  const rowPRateRefs = useRef<(HTMLInputElement | null)[]>([]);
+  const rowDiscRefs = useRef<(HTMLInputElement | null)[]>([]);
+  const rowMarkupRefs = useRef<(HTMLInputElement | null)[]>([]);
+  const rowSaleRateRefs = useRef<(HTMLInputElement | null)[]>([]);
 
   useEffect(() => {
     if (isOpen && product) {
@@ -98,7 +101,7 @@ export function StockItemModal({ isOpen, product, onClose, onProceed }: StockIte
     const netAmount = baseAmount - discAmt;
     const costRate = qty > 0 ? netAmount / qty : pRate;
 
-    if (field === 'markup' || field === 'p_rate' || field === 'disc_perc') {
+    if (field === 'markup') {
       const saleRate = costRate + (costRate * (row.markup || 0)) / 100;
       row.sale_rate = Number(saleRate.toFixed(2));
     } else if (field === 'sale_rate') {
@@ -129,47 +132,54 @@ export function StockItemModal({ isOpen, product, onClose, onProceed }: StockIte
     }
   };
 
-  // Focus transition and Auto Row Creation on Enter keypress in Row Qty
-  const handleRowQtyKeyDown = (index: number, e: React.KeyboardEvent<HTMLInputElement>) => {
+  // Focus transition across Row fields on Enter keypress
+  const handleCellKeyDown = (index: number, currentField: string, e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
       e.preventDefault();
-      const currentQty = parseFloat((e.target as HTMLInputElement).value) || 0;
-      updateRow(index, 'qty', currentQty);
+      if (currentField === 'qty') {
+        rowPRateRefs.current[index]?.focus();
+        rowPRateRefs.current[index]?.select();
+      } else if (currentField === 'p_rate') {
+        rowDiscRefs.current[index]?.focus();
+        rowDiscRefs.current[index]?.select();
+      } else if (currentField === 'disc_perc') {
+        rowMarkupRefs.current[index]?.focus();
+        rowMarkupRefs.current[index]?.select();
+      } else if (currentField === 'markup') {
+        rowSaleRateRefs.current[index]?.focus();
+        rowSaleRateRefs.current[index]?.select();
+      } else if (currentField === 'sale_rate') {
+        const currentQty = rows[index].qty || 0;
+        const currentSum = rows.reduce((sum, r, idx) => sum + (idx <= index ? r.qty || 0 : 0), 0);
+        const remaining = Math.max(0, targetQty - currentSum);
 
-      // Compute unadjusted quantity remaining after this row
-      const currentSum = rows.reduce((sum, r, idx) => sum + (idx <= index ? (idx === index ? currentQty : r.qty || 0) : 0), 0);
-      const remaining = Math.max(0, targetQty - currentSum);
-
-      if (remaining > 0) {
-        if (index + 1 < rows.length) {
-          const updated = [...rows];
-          updated[index + 1].qty = remaining;
-          setRows(updated);
-          setTimeout(() => {
+        if (remaining > 0) {
+          if (index + 1 < rows.length) {
             rowQtyRefs.current[index + 1]?.focus();
             rowQtyRefs.current[index + 1]?.select();
-          }, 50);
+          } else {
+            const lastRow = rows[index] || {};
+            const newRowIndex = rows.length;
+            setRows(prev => [
+              ...prev,
+              {
+                sno: prev.length + 1,
+                qty: remaining,
+                p_rate: lastRow.p_rate || product?.rate || 0,
+                disc_perc: lastRow.disc_perc || 0,
+                amount: Number((remaining * (lastRow.p_rate || product?.rate || 0)).toFixed(2)),
+                cost_rate: lastRow.cost_rate || product?.rate || 0,
+                markup: lastRow.markup || 0,
+                sale_rate: lastRow.sale_rate || product?.sales_price || 0
+              }
+            ]);
+            setTimeout(() => {
+              rowQtyRefs.current[newRowIndex]?.focus();
+              rowQtyRefs.current[newRowIndex]?.select();
+            }, 50);
+          }
         } else {
-          // Add a new row with remaining quantity balance
-          const lastRow = rows[index] || {};
-          const newRowIndex = rows.length;
-          setRows(prev => [
-            ...prev,
-            {
-              sno: prev.length + 1,
-              qty: remaining,
-              p_rate: lastRow.p_rate || product?.rate || 0,
-              disc_perc: lastRow.disc_perc || 0,
-              amount: Number((remaining * (lastRow.p_rate || product?.rate || 0)).toFixed(2)),
-              cost_rate: lastRow.cost_rate || product?.rate || 0,
-              markup: lastRow.markup || 0,
-              sale_rate: lastRow.sale_rate || product?.sales_price || 0
-            }
-          ]);
-          setTimeout(() => {
-            rowQtyRefs.current[newRowIndex]?.focus();
-            rowQtyRefs.current[newRowIndex]?.select();
-          }, 50);
+          handleProceed();
         }
       }
     }
@@ -221,7 +231,7 @@ export function StockItemModal({ isOpen, product, onClose, onProceed }: StockIte
         {/* Title Bar */}
         <div className="bg-slate-800 text-white font-bold px-4 py-2 flex justify-between items-center text-sm">
           <span>Stock : {product.prd_name}</span>
-          <button onClick={onClose} className="hover:bg-slate-700 px-2 py-0.5 rounded">✕</button>
+          <button onClick={onClose} className="hover:bg-slate-700 px-2 py-0.5 rounded font-bold">✕</button>
         </div>
 
         {/* Top Summary Badges */}
@@ -231,12 +241,12 @@ export function StockItemModal({ isOpen, product, onClose, onProceed }: StockIte
             <div className="bg-white px-1 py-0.5 border border-emerald-600">
               <input
                 ref={targetQtyRef}
-                type="number"
+                type="text"
                 value={targetQty || ''}
                 onChange={e => setTargetQty(parseFloat(e.target.value) || 0)}
                 onKeyDown={handleTargetQtyKeyDown}
                 placeholder="Enter Qty..."
-                className="w-full text-center font-mono text-base font-bold text-emerald-900 bg-transparent focus:outline-none"
+                className="w-full text-center font-mono text-base font-bold text-emerald-900 bg-transparent focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
               />
             </div>
           </div>
@@ -249,7 +259,7 @@ export function StockItemModal({ isOpen, product, onClose, onProceed }: StockIte
           </div>
 
           <div className="text-[11px] text-muted-foreground italic pl-2">
-            Enter Total Qty → Press [Enter] to focus row. Split quantities row-by-row until UnAdj.Qty is 0.00
+            Enter Total Qty → Press [Enter] to focus fields. Press [Enter] on each cell to jump to next field (how Tab works).
           </div>
         </div>
 
@@ -283,29 +293,33 @@ export function StockItemModal({ isOpen, product, onClose, onProceed }: StockIte
                   </TableCell>
                   <TableCell className="text-center font-mono p-1">{row.sno}</TableCell>
                   <TableCell className="p-1">
-                    <Input
+                    <input
                       ref={el => { rowQtyRefs.current[idx] = el; }}
-                      type="number"
+                      type="text"
                       value={row.qty || ''}
                       onChange={e => updateRow(idx, 'qty', e.target.value)}
-                      onKeyDown={e => handleRowQtyKeyDown(idx, e)}
-                      className="h-7 text-xs text-right font-mono bg-cyan-400 dark:bg-cyan-600 text-slate-950 font-bold focus:bg-cyan-300"
+                      onKeyDown={e => handleCellKeyDown(idx, 'qty', e)}
+                      className="h-7 w-full rounded border border-input text-xs text-right font-mono bg-cyan-400 dark:bg-cyan-600 text-slate-950 font-bold focus:bg-cyan-300 px-1.5 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                     />
                   </TableCell>
                   <TableCell className="p-1">
-                    <Input
-                      type="number"
+                    <input
+                      ref={el => { rowPRateRefs.current[idx] = el; }}
+                      type="text"
                       value={row.p_rate || ''}
                       onChange={e => updateRow(idx, 'p_rate', e.target.value)}
-                      className="h-7 text-xs text-right font-mono bg-background"
+                      onKeyDown={e => handleCellKeyDown(idx, 'p_rate', e)}
+                      className="h-7 w-full rounded border border-input text-xs text-right font-mono bg-background px-1.5 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                     />
                   </TableCell>
                   <TableCell className="p-1">
-                    <Input
-                      type="number"
+                    <input
+                      ref={el => { rowDiscRefs.current[idx] = el; }}
+                      type="text"
                       value={row.disc_perc || ''}
                       onChange={e => updateRow(idx, 'disc_perc', e.target.value)}
-                      className="h-7 text-xs text-right font-mono bg-background"
+                      onKeyDown={e => handleCellKeyDown(idx, 'disc_perc', e)}
+                      className="h-7 w-full rounded border border-input text-xs text-right font-mono bg-background px-1.5 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                     />
                   </TableCell>
                   <TableCell className="text-right font-mono font-bold p-1">
@@ -315,19 +329,23 @@ export function StockItemModal({ isOpen, product, onClose, onProceed }: StockIte
                     ₹{(row.cost_rate || 0).toFixed(2)}
                   </TableCell>
                   <TableCell className="p-1">
-                    <Input
-                      type="number"
+                    <input
+                      ref={el => { rowMarkupRefs.current[idx] = el; }}
+                      type="text"
                       value={row.markup || ''}
                       onChange={e => updateRow(idx, 'markup', e.target.value)}
-                      className="h-7 text-xs text-right font-mono bg-background"
+                      onKeyDown={e => handleCellKeyDown(idx, 'markup', e)}
+                      className="h-7 w-full rounded border border-input text-xs text-right font-mono bg-background px-1.5 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                     />
                   </TableCell>
                   <TableCell className="p-1">
-                    <Input
-                      type="number"
+                    <input
+                      ref={el => { rowSaleRateRefs.current[idx] = el; }}
+                      type="text"
                       value={row.sale_rate || ''}
                       onChange={e => updateRow(idx, 'sale_rate', e.target.value)}
-                      className="h-7 text-xs text-right font-mono bg-background font-bold"
+                      onKeyDown={e => handleCellKeyDown(idx, 'sale_rate', e)}
+                      className="h-7 w-full rounded border border-input text-xs text-right font-mono bg-emerald-100 dark:bg-emerald-950 font-bold px-1.5 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                     />
                   </TableCell>
                 </TableRow>
@@ -336,37 +354,27 @@ export function StockItemModal({ isOpen, product, onClose, onProceed }: StockIte
           </Table>
         </div>
 
-        {/* Table Footer Summary Row */}
-        <div className="bg-slate-100 dark:bg-slate-900 p-2 border-t flex justify-between items-center text-xs font-bold">
-          <Button size="sm" variant="outline" className="h-6 text-xs" onClick={addRow}>
-            + Add Row
-          </Button>
-
-          <div className="flex gap-8 font-mono">
-            <div className="flex items-center gap-2">
-              <span className="text-muted-foreground">Total Qty:</span>
-              <span className="bg-background border rounded px-3 py-0.5">{totalRowQty.toFixed(2)}</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-muted-foreground">Total Amount:</span>
-              <span className="bg-background border rounded px-3 py-0.5 text-emerald-600">
-                ₹{totalAmount.toFixed(2)}
-              </span>
-            </div>
+        {/* Footer Summary & Action Bar */}
+        <div className="p-3 bg-slate-200 dark:bg-slate-800 border-t flex flex-wrap items-center justify-between gap-3 text-xs font-bold">
+          <div className="flex items-center gap-2">
+            <Button size="sm" variant="outline" className="h-7 text-xs bg-background" onClick={addRow}>
+              + Add Row
+            </Button>
+            <Button size="sm" variant="outline" className="h-7 text-xs bg-background" onClick={copyBatch}>
+              Copy Batch [F6]
+            </Button>
           </div>
-        </div>
 
-        {/* Bottom Toolbar Bar */}
-        <div className="bg-muted/40 p-3 border-t flex justify-between items-center">
-          <Button size="sm" variant="outline" className="h-8 text-xs" onClick={copyBatch}>
-            Copy Batch [F6]
-          </Button>
+          <div className="flex items-center gap-6 font-mono">
+            <span>Total Qty: <span className="bg-background px-2 py-0.5 rounded border">{totalRowQty.toFixed(2)}</span></span>
+            <span>Total Amount: <span className="bg-emerald-600 text-white px-2 py-0.5 rounded font-bold">₹{totalAmount.toFixed(2)}</span></span>
+          </div>
 
-          <div className="flex gap-2">
-            <Button size="sm" className="h-8 text-xs bg-emerald-600 hover:bg-emerald-700 text-white font-bold" onClick={handleProceed}>
+          <div className="flex items-center gap-2">
+            <Button size="sm" className="h-7 text-xs bg-emerald-600 hover:bg-emerald-700 font-bold" onClick={handleProceed}>
               Proceed [F5]
             </Button>
-            <Button size="sm" variant="outline" className="h-8 text-xs" onClick={onClose}>
+            <Button size="sm" variant="outline" className="h-7 text-xs" onClick={onClose}>
               Cancel [Esc]
             </Button>
           </div>

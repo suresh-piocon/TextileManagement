@@ -138,13 +138,25 @@ function PurchaseTransactionContent() {
         })));
       }
 
-      // Fetch expenses
+      // Fetch expenses and map cleanly to default categories
       const { data: expData } = await supabase.from('pur_expenses').select('*').eq('pm_ref_no', inv.pm_ref_no);
+      const defaultExp = [
+        { exp_name: 'Expenses A/c', amount: 0 },
+        { exp_name: 'Freight Charges', amount: 0 }
+      ];
       if (expData && expData.length > 0) {
-        setOtherExpenses(expData.map((e: any) => ({ exp_name: e.exp_name, amount: e.exp_amount })));
-      } else {
-        setOtherExpenses([{ exp_name: 'Expenses A/c', amount: 0 }, { exp_name: 'Freight Charges', amount: 0 }]);
+        expData.forEach((e: any) => {
+          const match = defaultExp.find(d => d.exp_name.toLowerCase() === e.exp_name?.toLowerCase());
+          if (match) {
+            match.amount = e.exp_amount || 0;
+          } else {
+            defaultExp.push({ exp_name: e.exp_name, amount: e.exp_amount || 0 });
+          }
+        });
+      } else if (inv.pm_other_charges > 0) {
+        defaultExp[1].amount = inv.pm_other_charges;
       }
+      setOtherExpenses(defaultExp);
     } catch (e) {
       toast({ title: 'Error loading invoice details', variant: 'destructive' });
     } finally {
@@ -291,7 +303,7 @@ function PurchaseTransactionContent() {
     setSelectedVendorId(vendorId);
     const vendor = vendors.find(v => String(v.ledg_code) === String(vendorId));
     if (vendor) {
-      // 1. Company State Code Extraction (from GSTIN prefix, st_code, or state name)
+      // 1. Company State Code Extraction
       let compStateCode = company?.st_code || '';
       if (!compStateCode && company?.gstin) {
         compStateCode = company.gstin.substring(0, 2);
@@ -300,7 +312,7 @@ function PurchaseTransactionContent() {
         compStateCode = INDIAN_STATES.find(s => s.name.toLowerCase() === (company.state || '').toLowerCase())?.code || '';
       }
 
-      // 2. Vendor State Code Extraction (from GSTIN prefix, state_code, or state name)
+      // 2. Vendor State Code Extraction
       let vendorStateCode = vendor.state_code || vendor.st_code || '';
       if (!vendorStateCode && vendor.gstin) {
         vendorStateCode = vendor.gstin.substring(0, 2);
@@ -362,6 +374,19 @@ function PurchaseTransactionContent() {
 
     updated[index] = row;
     setItems(updated);
+  };
+
+  // Enter Key Focus Movement Helper across Grid Inputs (behaves like Tab)
+  const handleGridInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const inputs = Array.from(document.querySelectorAll('.grid-input')) as HTMLInputElement[];
+      const currentIndex = inputs.indexOf(e.currentTarget);
+      if (currentIndex >= 0 && currentIndex < inputs.length - 1) {
+        inputs[currentIndex + 1].focus();
+        inputs[currentIndex + 1].select();
+      }
+    }
   };
 
   // Add new empty row
@@ -783,10 +808,12 @@ function PurchaseTransactionContent() {
 
           <div className="flex items-center justify-between gap-1">
             <span className="bg-amber-600 text-white px-2 py-0.5 font-bold rounded">Invoice No</span>
-            <Input 
+            <input 
+              type="text"
               value={invoiceNo} 
               onChange={e => setInvoiceNo(e.target.value)} 
-              className="h-6 text-xs bg-background max-w-[120px] font-mono text-right font-bold"
+              onKeyDown={handleGridInputKeyDown}
+              className="grid-input h-6 text-xs bg-background border border-input rounded px-2 max-w-[120px] font-mono text-right font-bold focus:outline-none"
               placeholder="Inv No"
             />
           </div>
@@ -798,18 +825,19 @@ function PurchaseTransactionContent() {
 
           <div className="flex items-center justify-between gap-1">
             <span className="text-muted-foreground">Invoice Date</span>
-            <Input 
+            <input 
               type="date"
               value={invoiceDate} 
               onChange={e => setInvoiceDate(e.target.value)} 
-              className="h-6 text-xs bg-background max-w-[130px] font-mono"
+              onKeyDown={handleGridInputKeyDown}
+              className="grid-input h-6 text-xs bg-background border border-input rounded px-2 max-w-[130px] font-mono focus:outline-none"
             />
           </div>
 
           <div className="flex items-center justify-between gap-1">
             <span className="text-muted-foreground">Bill Type</span>
             <select 
-              className="flex h-6 rounded border border-input bg-background px-2 text-xs font-bold"
+              className="grid-input flex h-6 rounded border border-input bg-background px-2 text-xs font-bold focus:outline-none"
               value={billType}
               onChange={e => setBillType(e.target.value)}
             >
@@ -831,7 +859,7 @@ function PurchaseTransactionContent() {
               <div className="flex items-center gap-2">
                 <Label className="w-24 text-xs font-bold">Account Name</Label>
                 <select 
-                  className="flex-1 h-7 rounded border border-input bg-background px-2 text-xs font-bold"
+                  className="grid-input flex-1 h-7 rounded border border-input bg-background px-2 text-xs font-bold focus:outline-none"
                   value={selectedVendorId}
                   onChange={e => handleVendorSelect(e.target.value)}
                 >
@@ -861,7 +889,7 @@ function PurchaseTransactionContent() {
               <div className="flex items-center gap-2">
                 <Label className="w-24 text-xs font-bold">Tax Code [F6]</Label>
                 <select 
-                  className="flex-1 h-7 rounded border border-input bg-background px-2 text-xs font-bold"
+                  className="grid-input flex-1 h-7 rounded border border-input bg-background px-2 text-xs font-bold focus:outline-none"
                   value={taxCode}
                   onChange={e => setTaxCode(e.target.value)}
                 >
@@ -938,14 +966,16 @@ function PurchaseTransactionContent() {
                     <TableCell className="text-center font-mono p-1">{row.sno}</TableCell>
                     <TableCell className="p-1">
                       <div className="flex gap-1 items-center">
-                        <Input
+                        <input
+                          type="text"
                           value={row.prd_name}
                           onChange={e => updateRow(idx, 'prd_name', e.target.value)}
                           onFocus={() => {
                             setActiveRowIndex(idx);
                           }}
+                          onKeyDown={handleGridInputKeyDown}
                           placeholder="Select Product (F3)..."
-                          className="h-7 text-xs bg-background font-medium"
+                          className="grid-input h-7 w-full text-xs bg-background border border-input rounded px-2 font-medium focus:outline-none"
                         />
                         <Button 
                           type="button" 
@@ -962,61 +992,69 @@ function PurchaseTransactionContent() {
                       </div>
                     </TableCell>
                     <TableCell className="p-1 min-w-[75px]">
-                      <Input
-                        type="number"
+                      <input
+                        type="text"
                         value={row.qty || ''}
                         onChange={e => updateRow(idx, 'qty', e.target.value)}
-                        className="h-7 text-xs text-right font-mono font-bold bg-background px-1"
+                        onKeyDown={handleGridInputKeyDown}
+                        className="grid-input h-7 w-full text-xs text-right font-mono font-bold bg-background border border-input rounded px-1.5 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                       />
                     </TableCell>
                     <TableCell className="p-1 min-w-[65px]">
-                      <Input
+                      <input
+                        type="text"
                         value={row.unit || 'NOS'}
                         onChange={e => updateRow(idx, 'unit', e.target.value)}
-                        className="h-7 text-xs bg-background px-1"
+                        onKeyDown={handleGridInputKeyDown}
+                        className="grid-input h-7 w-full text-xs bg-background border border-input rounded px-1.5 focus:outline-none"
                       />
                     </TableCell>
                     <TableCell className="p-1 min-w-[90px]">
-                      <Input
-                        type="number"
+                      <input
+                        type="text"
                         value={row.rate || ''}
                         onChange={e => updateRow(idx, 'rate', e.target.value)}
-                        className="h-7 text-xs text-right font-mono bg-background px-1"
+                        onKeyDown={handleGridInputKeyDown}
+                        className="grid-input h-7 w-full text-xs text-right font-mono bg-background border border-input rounded px-1.5 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                       />
                     </TableCell>
                     <TableCell className="text-right font-mono font-bold p-1">
                       ₹{(row.amount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                     </TableCell>
                     <TableCell className="p-1">
-                      <Input
-                        type="number"
+                      <input
+                        type="text"
                         value={row.disc_perc || ''}
                         onChange={e => updateRow(idx, 'disc_perc', e.target.value)}
-                        className="h-7 text-xs text-right font-mono px-1"
+                        onKeyDown={handleGridInputKeyDown}
+                        className="grid-input h-7 w-full text-xs text-right font-mono border border-input rounded px-1.5 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                       />
                     </TableCell>
                     <TableCell className="p-1">
-                      <Input
-                        type="number"
+                      <input
+                        type="text"
                         value={row.disc_amt || ''}
                         onChange={e => updateRow(idx, 'disc_amt', e.target.value)}
-                        className="h-7 text-xs text-right font-mono px-1 font-semibold"
+                        onKeyDown={handleGridInputKeyDown}
+                        className="grid-input h-7 w-full text-xs text-right font-mono border border-input rounded px-1.5 font-semibold focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                       />
                     </TableCell>
                     <TableCell className="p-1">
-                      <Input
-                        type="number"
+                      <input
+                        type="text"
                         value={row.expenses || ''}
                         onChange={e => updateRow(idx, 'expenses', e.target.value)}
-                        className="h-7 text-xs text-right font-mono px-1"
+                        onKeyDown={handleGridInputKeyDown}
+                        className="grid-input h-7 w-full text-xs text-right font-mono border border-input rounded px-1.5 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                       />
                     </TableCell>
                     <TableCell className="p-1 min-w-[65px]">
-                      <Input
-                        type="number"
+                      <input
+                        type="text"
                         value={row.gst_perc || ''}
                         onChange={e => updateRow(idx, 'gst_perc', e.target.value)}
-                        className="h-7 text-xs text-center font-mono font-bold px-1"
+                        onKeyDown={handleGridInputKeyDown}
+                        className="grid-input h-7 w-full text-xs text-center font-mono font-bold border border-input rounded px-1.5 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                       />
                     </TableCell>
                     <TableCell className="text-right font-mono font-medium p-1 min-w-[100px] px-2">
@@ -1026,10 +1064,12 @@ function PurchaseTransactionContent() {
                       ₹{(row.net_rate || 0).toFixed(2)}
                     </TableCell>
                     <TableCell className="p-1 min-w-[90px]">
-                      <Input
+                      <input
+                        type="text"
                         value={row.hsn_code || ''}
                         onChange={e => updateRow(idx, 'hsn_code', e.target.value)}
-                        className="h-7 text-xs font-mono bg-background px-1"
+                        onKeyDown={handleGridInputKeyDown}
+                        className="grid-input h-7 w-full text-xs font-mono bg-background border border-input rounded px-1.5 focus:outline-none"
                       />
                     </TableCell>
                   </TableRow>
@@ -1065,20 +1105,20 @@ function PurchaseTransactionContent() {
             </div>
             <div className="flex justify-between items-center">
               <span className="text-muted-foreground">Cash Disc.</span>
-              <Input
-                type="number"
+              <input
+                type="text"
                 value={cashDisc || ''}
                 onChange={e => setCashDisc(parseFloat(e.target.value) || 0)}
-                className="h-6 w-24 text-xs text-right font-mono bg-background font-bold"
+                className="h-6 w-24 text-xs text-right font-mono border border-input rounded px-1.5 font-bold focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
               />
             </div>
             <div className="flex justify-between items-center">
               <span className="text-muted-foreground">Special Disc.</span>
-              <Input
-                type="number"
+              <input
+                type="text"
                 value={splDisc || ''}
                 onChange={e => setSplDisc(parseFloat(e.target.value) || 0)}
-                className="h-6 w-24 text-xs text-right font-mono bg-background font-bold"
+                className="h-6 w-24 text-xs text-right font-mono border border-input rounded px-1.5 font-bold focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
               />
             </div>
             <div className="flex justify-between items-center border-t pt-1 font-bold">
@@ -1095,11 +1135,11 @@ function PurchaseTransactionContent() {
             </div>
             <div className="flex justify-between items-center text-muted-foreground">
               <span>TDS (194Q)</span>
-              <Input
-                type="number"
+              <input
+                type="text"
                 value={tdsAmt || ''}
                 onChange={e => setTdsAmt(parseFloat(e.target.value) || 0)}
-                className="h-6 w-24 text-xs text-right font-mono bg-background"
+                className="h-6 w-24 text-xs text-right font-mono border border-input rounded px-1.5 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
               />
             </div>
           </div>
@@ -1112,16 +1152,16 @@ function PurchaseTransactionContent() {
             </div>
             {otherExpenses.map((exp, eIdx) => (
               <div key={eIdx} className="flex justify-between items-center gap-2">
-                <span className="text-xs truncate">{exp.exp_name}</span>
-                <Input
-                  type="number"
+                <span className="text-xs truncate font-medium">{exp.exp_name}</span>
+                <input
+                  type="text"
                   value={exp.amount || ''}
                   onChange={e => {
                     const copy = [...otherExpenses];
                     copy[eIdx].amount = parseFloat(e.target.value) || 0;
                     setOtherExpenses(copy);
                   }}
-                  className="h-6 w-24 text-xs text-right font-mono bg-background"
+                  className="h-6 w-24 text-xs text-right font-mono border border-input rounded px-1.5 font-bold focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                 />
               </div>
             ))}
@@ -1131,16 +1171,15 @@ function PurchaseTransactionContent() {
           <div className="space-y-1 pt-1">
             <div className="flex justify-between items-center font-medium text-xs">
               <span>Total Value</span>
-              <span className="font-mono">₹{rawTotalValue.toFixed(2)}</span>
+              <span className="font-mono font-bold">₹{rawTotalValue.toFixed(2)}</span>
             </div>
             <div className="flex justify-between items-center text-xs">
               <span>Round Off</span>
-              <Input
-                type="number"
-                step="0.01"
+              <input
+                type="text"
                 value={roundOff || ''}
                 onChange={e => setRoundOff(parseFloat(e.target.value) || 0)}
-                className="h-6 w-20 text-xs text-right font-mono bg-background"
+                className="h-6 w-20 text-xs text-right font-mono border border-input rounded px-1.5 font-bold focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
               />
             </div>
 
