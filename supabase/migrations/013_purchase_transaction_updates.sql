@@ -1,0 +1,38 @@
+-- 013_purchase_transaction_updates.sql
+
+-- Update pur_mast with additional invoice fields
+ALTER TABLE pur_mast ADD COLUMN IF NOT EXISTS pm_bill_type VARCHAR(50) DEFAULT 'CREDIT';
+ALTER TABLE pur_mast ADD COLUMN IF NOT EXISTS pm_sales_person VARCHAR(100) DEFAULT 'Direct';
+ALTER TABLE pur_mast ADD COLUMN IF NOT EXISTS pm_tax_on_exp BOOLEAN DEFAULT false;
+ALTER TABLE pur_mast ADD COLUMN IF NOT EXISTS pm_sub_total NUMERIC(18,2) DEFAULT 0;
+ALTER TABLE pur_mast ADD COLUMN IF NOT EXISTS pm_item_disc_amt NUMERIC(18,2) DEFAULT 0;
+ALTER TABLE pur_mast ADD COLUMN IF NOT EXISTS pm_cash_disc NUMERIC(18,2) DEFAULT 0;
+ALTER TABLE pur_mast ADD COLUMN IF NOT EXISTS pm_spl_disc NUMERIC(18,2) DEFAULT 0;
+ALTER TABLE pur_mast ADD COLUMN IF NOT EXISTS pm_tot_disc NUMERIC(18,2) DEFAULT 0;
+ALTER TABLE pur_mast ADD COLUMN IF NOT EXISTS pm_taxable_amt NUMERIC(18,2) DEFAULT 0;
+ALTER TABLE pur_mast ADD COLUMN IF NOT EXISTS pm_tot_tax NUMERIC(18,2) DEFAULT 0;
+ALTER TABLE pur_mast ADD COLUMN IF NOT EXISTS pm_tds_amt NUMERIC(18,2) DEFAULT 0;
+ALTER TABLE pur_mast ADD COLUMN IF NOT EXISTS pm_other_charges NUMERIC(18,2) DEFAULT 0;
+ALTER TABLE pur_mast ADD COLUMN IF NOT EXISTS pm_remarks VARCHAR(500);
+
+-- Update pur_child with additional line item fields
+ALTER TABLE pur_child ADD COLUMN IF NOT EXISTS pc_sno INTEGER;
+ALTER TABLE pur_child ADD COLUMN IF NOT EXISTS pc_prname VARCHAR(150);
+ALTER TABLE pur_child ADD COLUMN IF NOT EXISTS pc_unit VARCHAR(50) DEFAULT 'NOS';
+ALTER TABLE pur_child ADD COLUMN IF NOT EXISTS pc_amount NUMERIC(18,2) DEFAULT 0;
+ALTER TABLE pur_child ADD COLUMN IF NOT EXISTS pc_expenses NUMERIC(18,2) DEFAULT 0;
+ALTER TABLE pur_child ADD COLUMN IF NOT EXISTS pc_gst_perc NUMERIC(18,2) DEFAULT 0;
+ALTER TABLE pur_child ADD COLUMN IF NOT EXISTS pc_txbl_rate NUMERIC(18,2) DEFAULT 0;
+ALTER TABLE pur_child ADD COLUMN IF NOT EXISTS pc_net_rate NUMERIC(18,2) DEFAULT 0;
+ALTER TABLE pur_child ADD COLUMN IF NOT EXISTS pc_hsn_code VARCHAR(50);
+
+-- Create table for itemized invoice extra expenses
+CREATE TABLE IF NOT EXISTS pur_expenses (
+    pe_ref_no SERIAL PRIMARY KEY,
+    pm_ref_no INTEGER REFERENCES pur_mast(pm_ref_no) ON DELETE CASCADE,
+    exp_ledg_code INTEGER REFERENCES ledger(ledg_code),
+    exp_name VARCHAR(100),
+    exp_amount NUMERIC(18,2) DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+ALTER TABLE pur_expenses ENABLE ROW LEVEL SECURITY;
