@@ -190,6 +190,7 @@ export const MENU_ITEMS: MenuItem[] = [
     label: "Reports",
     icon: "BarChart3",
     children: [
+      { id: "batch-movement", label: "Batch Movement", icon: "Boxes", href: "/reports/batch-movement" },
       { id: "purchase-register", label: "Purchase Register", icon: "FileSpreadsheet", href: "/reports/purchase-register" },
       { id: "sales-register", label: "Sales Register", icon: "FileSpreadsheet", href: "/reports/sales-register" },
       { id: "stock-report", label: "Stock Report", icon: "ClipboardList", href: "/reports/stock-report" },
