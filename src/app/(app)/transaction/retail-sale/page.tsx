@@ -100,7 +100,7 @@ export default function RetailSalePOSPage() {
 
   // Customer Details Bar (Image 3)
   const [customerMobile, setCustomerMobile] = useState<string>("");
-  const [customerName, setCustomerName] = useState<string>("Sumit");
+  const [customerName, setCustomerName] = useState<string>("");
   const [customerEmail, setCustomerEmail] = useState<string>("");
 
   // Customers & Stock Lists from DB
@@ -117,8 +117,19 @@ export default function RetailSalePOSPage() {
   const [isStockModalOpen, setIsStockModalOpen] = useState<boolean>(false);
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState<boolean>(false);
 
-  // Stock Modal Highlighted Row Index (Image 2)
+  // Stock Modal Highlighted Row Index & Row Refs for Auto-Scroll Navigation
   const [selectedStockRowIndex, setSelectedStockRowIndex] = useState<number>(0);
+  const stockRowRefs = useRef<(HTMLTableRowElement | null)[]>([]);
+
+  // Auto-scroll highlighted row into view when navigating with Up/Down Arrow keys
+  useEffect(() => {
+    if (isStockModalOpen && stockRowRefs.current[selectedStockRowIndex]) {
+      stockRowRefs.current[selectedStockRowIndex]?.scrollIntoView({
+        behavior: "smooth",
+        block: "nearest",
+      });
+    }
+  }, [selectedStockRowIndex, isStockModalOpen]);
 
   // Payment Breakdown Table (Image 1: CASH, CN/ADVANCE, CARD, UPI / QR CODE)
   const [paymentRows, setPaymentRows] = useState<PaymentRow[]>([
@@ -865,19 +876,27 @@ export default function RetailSalePOSPage() {
                   <div className="flex items-center gap-1">
                     <Input
                       type="number"
-                      value={cashDiscPerc || ""}
+                      step="0.01"
+                      value={cashDiscPerc !== 0 ? cashDiscPerc : ""}
                       onChange={(e) => handleCashDiscPercChange(e.target.value)}
-                      placeholder="%"
-                      className="h-5 text-xs text-right w-12 bg-white px-1 font-bold"
+                      onBlur={() => {
+                        if (cashDiscPerc) setCashDiscPerc(Number(cashDiscPerc.toFixed(2)));
+                      }}
+                      placeholder="0.00"
+                      className="h-5 text-xs text-right w-14 bg-white px-1 font-bold [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                       title="Discount Percentage (%)"
                     />
                     <span className="text-[10px] font-bold text-slate-500">%</span>
                     <Input
                       type="number"
-                      value={cashDisc || ""}
+                      step="0.01"
+                      value={cashDisc !== 0 ? cashDisc : ""}
                       onChange={(e) => handleCashDiscAmountChange(e.target.value)}
-                      placeholder="₹"
-                      className="h-5 text-xs text-right w-20 bg-white px-1 font-bold text-red-600"
+                      onBlur={() => {
+                        if (cashDisc) setCashDisc(Number(cashDisc.toFixed(2)));
+                      }}
+                      placeholder="0.00"
+                      className="h-5 text-xs text-right w-20 bg-white px-1 font-bold text-red-600 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                       title="Discount Amount (₹)"
                     />
                   </div>
@@ -1049,6 +1068,9 @@ export default function RetailSalePOSPage() {
                   return (
                     <TableRow
                       key={b.bar_no}
+                      ref={(el) => {
+                        stockRowRefs.current[idx] = el;
+                      }}
                       className={`cursor-pointer transition-colors ${
                         isSelected
                           ? "bg-yellow-200 text-slate-950 font-bold border-2 border-amber-500 shadow-inner"
