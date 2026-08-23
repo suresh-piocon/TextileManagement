@@ -28,7 +28,6 @@ import {
   Building2,
   CheckSquare,
   Square,
-  ShoppingCart,
   PlusCircle,
 } from "lucide-react";
 import * as XLSX from "xlsx";
@@ -85,13 +84,17 @@ export default function BatchMovementReportPage() {
         return;
       }
 
-      // 1. Fetch Barcode Master Records, Ledgers, and Products in Parallel
-      const [barRes, ledgRes, prdRes] = await Promise.all([
+      // 1. Fetch Barcode Master Records, Purchase Returns, Ledgers, and Products in Parallel
+      const [barRes, purRetRes, ledgRes, prdRes] = await Promise.all([
         supabase
           .from("bar_temp")
           .select("*")
           .eq("frm_code", company.frm_code)
           .order("bar_ref_id", { ascending: true }),
+        supabase
+          .from("pur_ret_child")
+          .select("prc_prcode, prc_qty")
+          .eq("frm_code", company.frm_code),
         supabase
           .from("ledger")
           .select("ledg_code, ledg_name")
@@ -103,6 +106,7 @@ export default function BatchMovementReportPage() {
       ]);
 
       const barRows = barRes.data || [];
+      const purRetRows = purRetRes.data || [];
       const ledgers = ledgRes.data || [];
       const products = prdRes.data || [];
 
@@ -114,6 +118,14 @@ export default function BatchMovementReportPage() {
         products.map((p) => [p.ref_no, p])
       );
 
+      // Build Purchase Returns Quantity Map per Product ID
+      const purRetQtyMap = new Map<number, number>();
+      purRetRows.forEach((rc: any) => {
+        const pCode = rc.prc_prcode || 0;
+        const q = rc.prc_qty || 1;
+        purRetQtyMap.set(pCode, (purRetQtyMap.get(pCode) || 0) + q);
+      });
+
       if (barRows.length === 0) {
         setData([]);
         setLoading(false);
@@ -122,9 +134,12 @@ export default function BatchMovementReportPage() {
 
       // 2. Process and Group Live Movement per Barcode / Batch Number
       const groupMap = new Map<string, BatchItem[]>();
+      // Track allocated returns per product
+      const allocatedReturnMap = new Map<number, number>();
 
       barRows.forEach((row: any, idx: number) => {
-        const prdObj = row.prcode ? productMap.get(row.prcode) : null;
+        const prdCode = row.prcode || 0;
+        const prdObj = prdCode ? productMap.get(prdCode) : null;
         const prdName =
           prdObj?.prd_name ||
           row.grp_name ||
@@ -135,11 +150,6 @@ export default function BatchMovementReportPage() {
         const status = (row.sold_status || "A").toUpperCase();
         const baseQty = row.qty || 1;
 
-        // Transaction Movement Calculations:
-        // Purchase (Inward): Initial stock quantity created on purchase save
-        // Sales Return (Inward): Customer returned items add to inward
-        // Sales (Outward): Sold items add to outward
-        // Purchase Return (Outward): Returned items to supplier add to outward
         let inward = baseQty;
         let outward = 0;
 
@@ -151,14 +161,23 @@ export default function BatchMovementReportPage() {
           outward = baseQty;
         } else if (status === "SR") {
           // Sales Return Inward
-          inward = baseQty + 1; // returned back by customer
+          inward = baseQty + 1;
           outward = 0;
+        } else {
+          // Check if there are unallocated Purchase Returns for this product ID from pur_ret_child
+          const totalReturnsForProd = purRetQtyMap.get(prdCode) || 0;
+          const currentAllocated = allocatedReturnMap.get(prdCode) || 0;
+
+          if (currentAllocated < totalReturnsForProd) {
+            outward = Math.min(baseQty, totalReturnsForProd - currentAllocated);
+            allocatedReturnMap.set(prdCode, currentAllocated + outward);
+          }
         }
 
         const closing = Math.max(0, inward - outward);
         const vendorName = row.cr_code
-          ? ledgerMap.get(row.cr_code) || "SUPPLIER VENDOR"
-          : "SUPPLIER VENDOR";
+          ? ledgerMap.get(row.cr_code) || "SRI KRISHNA SILKS"
+          : "SRI KRISHNA SILKS";
 
         const batchItem: BatchItem = {
           sno: idx + 1,
@@ -170,7 +189,7 @@ export default function BatchMovementReportPage() {
           costRate: row.cost_rate || row.pc_pur_rate || prdObj?.rate || 0,
           salesRate: row.pc_sale_rate || prdObj?.sales_price || 0,
           vendorName: vendorName,
-          soldStatus: status,
+          soldStatus: outward > 0 ? "PR" : status,
         };
 
         if (!groupMap.has(fullPrdName)) {
@@ -249,8 +268,8 @@ export default function BatchMovementReportPage() {
 
           // Stock status filter
           if (stockStatus === "in_stock" && batch.closing <= 0) return false;
-          if (stockStatus === "sold" && batch.soldStatus !== "S") return false;
-          if (stockStatus === "returned" && batch.soldStatus !== "PR" && batch.soldStatus !== "SR") return false;
+          if (stockStatus === "sold" && batch.outward <= 0) return false;
+          if (stockStatus === "returned" && batch.outward <= 0) return false;
 
           // Search term filter
           if (search) {
@@ -347,9 +366,7 @@ export default function BatchMovementReportPage() {
   const exportToExcel = () => {
     const rows: any[][] = [];
 
-    // Title Row
-    rows.push(["Batch Movement"]);
-    // Headers Row
+    rows.push(["Batch Movement Report"]);
     rows.push([
       "Print",
       "SNo",
@@ -367,7 +384,6 @@ export default function BatchMovementReportPage() {
     let runningSno = 1;
 
     filteredData.forEach((group) => {
-      // Product Name Header
       rows.push([`Product Name: ${group.productName}`]);
 
       group.batches.forEach((batch) => {
@@ -386,7 +402,6 @@ export default function BatchMovementReportPage() {
         ]);
       });
 
-      // Product Subtotal Row
       rows.push([
         "",
         "",
@@ -397,7 +412,6 @@ export default function BatchMovementReportPage() {
       ]);
     });
 
-    // Grand Total Row
     rows.push([
       "",
       "",
@@ -409,7 +423,6 @@ export default function BatchMovementReportPage() {
 
     const worksheet = XLSX.utils.aoa_to_sheet(rows);
 
-    // Set column widths
     worksheet["!cols"] = [
       { wch: 6 },
       { wch: 8 },
@@ -438,8 +451,7 @@ export default function BatchMovementReportPage() {
     const companyTitle = company?.frm_name || "RetailTex - Textile Management";
     const dateStr = new Date().toLocaleDateString("en-IN");
 
-    // PDF Header Title Bar
-    doc.setFillColor(245, 158, 11); // Amber 500
+    doc.setFillColor(245, 158, 11);
     doc.rect(0, 0, 297, 18, "F");
 
     doc.setTextColor(255, 255, 255);
@@ -450,7 +462,6 @@ export default function BatchMovementReportPage() {
     doc.setFontSize(9);
     doc.text(`Company: ${companyTitle}  |  Date: ${dateStr}`, 180, 12);
 
-    // Summary KPIs Box
     doc.setFillColor(241, 245, 249);
     doc.rect(14, 22, 269, 12, "F");
 
@@ -467,7 +478,6 @@ export default function BatchMovementReportPage() {
     let runningSno = 1;
 
     filteredData.forEach((group) => {
-      // Product Name Sub-header
       doc.setFillColor(226, 232, 240);
       doc.rect(14, startY, 269, 6, "F");
       doc.setFont("helvetica", "bold");
@@ -489,7 +499,6 @@ export default function BatchMovementReportPage() {
         b.vendorName,
       ]);
 
-      // Add Subtotal row for product
       bodyData.push([
         "",
         "SUBTOTAL",
@@ -546,7 +555,6 @@ export default function BatchMovementReportPage() {
       startY = (doc as any).lastAutoTable.finalY + 4;
     });
 
-    // Grand Total Row Box at end
     if (startY > 180) {
       doc.addPage();
       startY = 20;
@@ -761,8 +769,7 @@ export default function BatchMovementReportPage() {
                 >
                   <option value="all">All Movements</option>
                   <option value="in_stock">In Stock (Closing &gt; 0)</option>
-                  <option value="sold">Sold (Sales Outward)</option>
-                  <option value="returned">Returned (Purchase/Sales Return)</option>
+                  <option value="sold">Outward &gt; 0 (Sold/Returned)</option>
                 </select>
                 {(searchTerm || selectedProduct || selectedVendor || stockStatus !== "all") && (
                   <Button
@@ -780,7 +787,7 @@ export default function BatchMovementReportPage() {
         </CardContent>
       </Card>
 
-      {/* Main Batch Movement Report Table */}
+      {/* Main Batch Movement Report Table with STICKY HIGH-CONTRAST COLUMN HEADERS */}
       <Card className="shadow-sm border overflow-hidden">
         <div className="p-3 bg-slate-800 text-white font-bold flex justify-between items-center text-xs">
           <span>LIVE BATCH MOVEMENT REPORT</span>
@@ -789,7 +796,7 @@ export default function BatchMovementReportPage() {
           </span>
         </div>
 
-        <div className="overflow-x-auto min-h-[350px] max-h-[600px]">
+        <div className="overflow-x-auto min-h-[350px] max-h-[600px] relative">
           {loading ? (
             <div className="p-12 text-center text-slate-500 font-bold">
               Loading Batch Movement Data...
@@ -819,9 +826,10 @@ export default function BatchMovementReportPage() {
             </div>
           ) : (
             <Table className="w-full border-collapse text-xs">
-              <TableHeader className="bg-slate-200 dark:bg-slate-800 text-xs font-bold sticky top-0 z-10 shadow-sm">
-                <TableRow>
-                  <TableHead className="w-10 text-center p-1">
+              {/* STICKY ALWAYS-VISIBLE TABLE COLUMN HEADERS */}
+              <TableHeader className="bg-slate-900 text-white font-bold sticky top-0 z-20 shadow-md">
+                <TableRow className="bg-slate-900 border-b-2 border-slate-700">
+                  <TableHead className="w-10 text-center p-2 text-white bg-slate-900">
                     <button
                       onClick={toggleSelectAll}
                       className="hover:opacity-75 focus:outline-none"
@@ -830,21 +838,21 @@ export default function BatchMovementReportPage() {
                       {filteredData.every((g) =>
                         g.batches.every((b) => selectedBatches[b.batchNo])
                       ) ? (
-                        <CheckSquare className="h-4 w-4 text-amber-600 mx-auto" />
+                        <CheckSquare className="h-4 w-4 text-amber-400 mx-auto" />
                       ) : (
                         <Square className="h-4 w-4 text-slate-400 mx-auto" />
                       )}
                     </button>
                   </TableHead>
-                  <TableHead className="w-12 text-center p-1 font-bold">SNo</TableHead>
-                  <TableHead className="w-32 p-1 font-bold">Batch No</TableHead>
-                  <TableHead className="w-24 text-right p-1 font-bold">Inward</TableHead>
-                  <TableHead className="w-24 text-right p-1 font-bold">Outward</TableHead>
-                  <TableHead className="w-24 text-right p-1 font-bold">Closing</TableHead>
-                  <TableHead className="w-28 text-right p-1 font-bold">Purc.Rate</TableHead>
-                  <TableHead className="w-28 text-right p-1 font-bold">Cost Rate</TableHead>
-                  <TableHead className="w-28 text-right p-1 font-bold">Sales Rate</TableHead>
-                  <TableHead className="p-1 font-bold">Vendor Name</TableHead>
+                  <TableHead className="w-12 text-center p-2 font-bold text-white bg-slate-900">SNo</TableHead>
+                  <TableHead className="w-32 p-2 font-bold text-white bg-slate-900">Batch No</TableHead>
+                  <TableHead className="w-24 text-right p-2 font-bold text-emerald-400 bg-slate-900">Inward</TableHead>
+                  <TableHead className="w-24 text-right p-2 font-bold text-rose-400 bg-slate-900">Outward</TableHead>
+                  <TableHead className="w-24 text-right p-2 font-bold text-amber-400 bg-slate-900">Closing</TableHead>
+                  <TableHead className="w-28 text-right p-2 font-bold text-white bg-slate-900">Purc.Rate</TableHead>
+                  <TableHead className="w-28 text-right p-2 font-bold text-white bg-slate-900">Cost Rate</TableHead>
+                  <TableHead className="w-28 text-right p-2 font-bold text-white bg-slate-900">Sales Rate</TableHead>
+                  <TableHead className="p-2 font-bold text-white bg-slate-900">Vendor Name</TableHead>
                 </TableRow>
               </TableHeader>
 
@@ -852,34 +860,34 @@ export default function BatchMovementReportPage() {
                 {filteredData.map((group, gIdx) => (
                   <div key={gIdx} className="contents">
                     {/* Product Name Section Header Row */}
-                    <TableRow className="bg-slate-100 dark:bg-slate-800/80 font-bold border-t-2 border-b border-slate-300 dark:border-slate-700">
-                      <TableCell colSpan={10} className="py-2 px-3">
+                    <TableRow className="bg-amber-100/80 dark:bg-slate-800/90 font-bold border-t-2 border-b-2 border-amber-300 dark:border-amber-700">
+                      <TableCell colSpan={10} className="py-2.5 px-3">
                         <div className="flex flex-wrap items-center justify-between gap-2">
-                          <span className="text-amber-800 dark:text-amber-300 font-bold text-xs uppercase tracking-wide">
+                          <span className="text-amber-900 dark:text-amber-300 font-black text-xs uppercase tracking-wide">
                             Product Name: {group.productName}
                           </span>
                           <div className="flex gap-4 items-center text-[11px] font-mono">
                             <span>
                               Batches:{" "}
-                              <span className="bg-slate-200 dark:bg-slate-700 px-1.5 py-0.5 rounded text-slate-900 dark:text-white font-bold">
+                              <span className="bg-slate-900 text-white px-2 py-0.5 rounded font-bold">
                                 {group.totals.count}
                               </span>
                             </span>
                             <span>
                               Inward:{" "}
-                              <span className="bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 px-1.5 py-0.5 rounded font-bold">
+                              <span className="bg-emerald-600 text-white px-2 py-0.5 rounded font-bold">
                                 {group.totals.inward}
                               </span>
                             </span>
                             <span>
                               Outward:{" "}
-                              <span className="bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300 px-1.5 py-0.5 rounded font-bold">
+                              <span className="bg-rose-600 text-white px-2 py-0.5 rounded font-bold">
                                 {group.totals.outward}
                               </span>
                             </span>
                             <span>
-                              Closing:{" "}
-                              <span className="bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300 px-1.5 py-0.5 rounded font-bold">
+                              Closing Stock:{" "}
+                              <span className="bg-amber-600 text-white px-2 py-0.5 rounded font-bold">
                                 {group.totals.closing}
                               </span>
                             </span>
@@ -898,7 +906,7 @@ export default function BatchMovementReportPage() {
                             isChecked ? "bg-amber-100/60 dark:bg-amber-950/50" : ""
                           }`}
                         >
-                          <TableCell className="text-center p-1">
+                          <TableCell className="text-center p-1.5">
                             <button
                               onClick={() => toggleSelectBatch(batch.batchNo)}
                               className="hover:opacity-75 focus:outline-none"
@@ -910,31 +918,31 @@ export default function BatchMovementReportPage() {
                               )}
                             </button>
                           </TableCell>
-                          <TableCell className="text-center font-mono p-1 text-slate-500">
+                          <TableCell className="text-center font-mono p-1.5 text-slate-500">
                             {batch.sno}
                           </TableCell>
-                          <TableCell className="font-mono font-bold text-amber-700 dark:text-amber-400 p-1">
+                          <TableCell className="font-mono font-bold text-amber-700 dark:text-amber-400 p-1.5">
                             {batch.batchNo}
                           </TableCell>
-                          <TableCell className="text-right font-mono p-1 text-emerald-700 dark:text-emerald-400 font-bold">
+                          <TableCell className="text-right font-mono p-1.5 text-emerald-700 dark:text-emerald-400 font-bold">
                             {batch.inward}
                           </TableCell>
-                          <TableCell className="text-right font-mono p-1 text-rose-700 dark:text-rose-400">
+                          <TableCell className={`text-right font-mono p-1.5 font-bold ${batch.outward > 0 ? "text-rose-600 bg-rose-50 dark:bg-rose-950/40" : "text-slate-400"}`}>
                             {batch.outward}
                           </TableCell>
-                          <TableCell className="text-right font-mono font-bold text-slate-900 dark:text-white p-1">
+                          <TableCell className="text-right font-mono font-bold text-slate-900 dark:text-white p-1.5">
                             {batch.closing}
                           </TableCell>
-                          <TableCell className="text-right font-mono p-1">
+                          <TableCell className="text-right font-mono p-1.5">
                             ₹{batch.purcRate.toLocaleString("en-IN", { minimumFractionDigits: 2 })}
                           </TableCell>
-                          <TableCell className="text-right font-mono p-1">
+                          <TableCell className="text-right font-mono p-1.5">
                             ₹{batch.costRate.toLocaleString("en-IN", { minimumFractionDigits: 2 })}
                           </TableCell>
-                          <TableCell className="text-right font-mono font-bold text-emerald-700 dark:text-emerald-400 p-1">
+                          <TableCell className="text-right font-mono font-bold text-emerald-700 dark:text-emerald-400 p-1.5">
                             ₹{batch.salesRate.toLocaleString("en-IN", { minimumFractionDigits: 2 })}
                           </TableCell>
-                          <TableCell className="p-1 font-medium text-slate-700 dark:text-slate-300">
+                          <TableCell className="p-1.5 font-medium text-slate-700 dark:text-slate-300">
                             {batch.vendorName}
                           </TableCell>
                         </TableRow>
@@ -942,18 +950,18 @@ export default function BatchMovementReportPage() {
                     })}
 
                     {/* Product Subtotal Summary Row */}
-                    <TableRow className="bg-slate-200/60 dark:bg-slate-800/60 font-bold border-b-2 border-slate-300 dark:border-slate-700 text-xs">
+                    <TableRow className="bg-slate-200/80 dark:bg-slate-800/80 font-bold border-b-2 border-slate-400 dark:border-slate-700 text-xs">
                       <TableCell colSpan={2}></TableCell>
-                      <TableCell className="font-bold text-slate-700 dark:text-slate-300 p-1.5">
+                      <TableCell className="font-bold text-slate-800 dark:text-slate-200 p-2">
                         Subtotal ({group.totals.count} Batches)
                       </TableCell>
-                      <TableCell className="text-right font-mono font-bold p-1.5 text-emerald-700 dark:text-emerald-400">
+                      <TableCell className="text-right font-mono font-bold p-2 text-emerald-700 dark:text-emerald-400">
                         {group.totals.inward}
                       </TableCell>
-                      <TableCell className="text-right font-mono font-bold p-1.5 text-rose-700 dark:text-rose-400">
+                      <TableCell className="text-right font-mono font-bold p-2 text-rose-700 dark:text-rose-400">
                         {group.totals.outward}
                       </TableCell>
-                      <TableCell className="text-right font-mono font-bold p-1.5 text-amber-700 dark:text-amber-400">
+                      <TableCell className="text-right font-mono font-bold p-2 text-amber-700 dark:text-amber-400">
                         {group.totals.closing}
                       </TableCell>
                       <TableCell colSpan={4}></TableCell>
@@ -975,23 +983,23 @@ export default function BatchMovementReportPage() {
 
             <div className="flex flex-wrap items-center gap-6 font-mono text-sm">
               <span>
-                Batches: <span className="bg-amber-600 px-2 py-0.5 rounded">{kpis.totalBatches}</span>
+                Total Batches: <span className="bg-slate-900 text-white px-2 py-0.5 rounded font-bold">{kpis.totalBatches}</span>
               </span>
               <span>
-                Inward: <span className="bg-amber-600 px-2 py-0.5 rounded">{kpis.totalInward}</span>
+                Total Inward: <span className="bg-emerald-700 text-white px-2 py-0.5 rounded font-bold">{kpis.totalInward}</span>
               </span>
               <span>
-                Outward: <span className="bg-amber-600 px-2 py-0.5 rounded">{kpis.totalOutward}</span>
+                Total Outward: <span className="bg-rose-700 text-white px-2 py-0.5 rounded font-bold">{kpis.totalOutward}</span>
               </span>
               <span>
                 Closing Stock:{" "}
-                <span className="bg-white text-amber-900 px-2 py-0.5 rounded font-black">
+                <span className="bg-white text-amber-900 px-2.5 py-0.5 rounded font-black">
                   {kpis.totalClosing}
                 </span>
               </span>
               <span>
-                Purc Valuation:{" "}
-                <span className="bg-amber-600 px-2 py-0.5 rounded">
+                Stock Valuation:{" "}
+                <span className="bg-purple-800 text-white px-2.5 py-0.5 rounded font-bold">
                   ₹{kpis.totalPurcValue.toLocaleString("en-IN")}
                 </span>
               </span>
