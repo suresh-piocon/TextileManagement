@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { useApp } from "@/hooks/use-app";
 import { Button } from "@/components/ui/button";
@@ -27,8 +28,9 @@ import {
   Building2,
   CheckSquare,
   Square,
+  ShoppingCart,
+  PlusCircle,
 } from "lucide-react";
-import seedProductsData from "@/lib/data/batch-movement-seed.json";
 import * as XLSX from "xlsx";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
@@ -43,6 +45,7 @@ interface BatchItem {
   costRate: number;
   salesRate: number;
   vendorName: string;
+  soldStatus: string; // A (Available) | S (Sales Outward) | PR (Purchase Return Outward) | SR (Sales Return Inward)
   checked?: boolean;
 }
 
@@ -58,102 +61,147 @@ interface ProductGroup {
 }
 
 export default function BatchMovementReportPage() {
+  const router = useRouter();
   const { company } = useApp();
   const supabase = createClient();
 
   const [loading, setLoading] = useState<boolean>(true);
-  const [data, setData] = useState<ProductGroup[]>(seedProductsData as ProductGroup[]);
+  const [data, setData] = useState<ProductGroup[]>([]);
 
   // Filters State
   const [searchTerm, setSearchTerm] = useState<string>("");
   const [selectedProduct, setSelectedProduct] = useState<string>("");
   const [selectedVendor, setSelectedVendor] = useState<string>("");
-  const [stockStatus, setStockStatus] = useState<string>("all"); // all | in_stock | sold
+  const [stockStatus, setStockStatus] = useState<string>("all"); // all | in_stock | sold | returned
   const [selectedBatches, setSelectedBatches] = useState<Record<string, boolean>>({});
 
-  // Fetch Live Database Data with Seed Fallback
+  // Fetch Dynamic Live Transaction Data (Purchase Inward, Purchase Return Outward, Sales Outward, Sales Return Inward)
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
       if (!company?.frm_code) {
-        setData(seedProductsData as ProductGroup[]);
+        setData([]);
         setLoading(false);
         return;
       }
 
-      // Query bar_temp table
-      const { data: barRows, error } = await supabase
-        .from("bar_temp")
-        .select("*, product:prcode(prd_name, hsn_code), ledger:cr_code(ledg_name)")
-        .eq("frm_code", company.frm_code)
-        .order("bar_ref_id", { ascending: true });
+      // 1. Fetch Barcode Master Records, Ledgers, and Products in Parallel
+      const [barRes, ledgRes, prdRes] = await Promise.all([
+        supabase
+          .from("bar_temp")
+          .select("*")
+          .eq("frm_code", company.frm_code)
+          .order("bar_ref_id", { ascending: true }),
+        supabase
+          .from("ledger")
+          .select("ledg_code, ledg_name")
+          .eq("frm_code", company.frm_code),
+        supabase
+          .from("product")
+          .select("ref_no, prd_name, hsn_code, rate, sales_price")
+          .eq("frm_code", company.frm_code),
+      ]);
 
-      if (error || !barRows || barRows.length === 0) {
-        // Fallback to imported Excel seed data
-        setData(seedProductsData as ProductGroup[]);
-      } else {
-        // Group database rows by product name
-        const groupMap = new Map<string, BatchItem[]>();
+      const barRows = barRes.data || [];
+      const ledgers = ledgRes.data || [];
+      const products = prdRes.data || [];
 
-        barRows.forEach((row: any, idx: number) => {
-          const prdName =
-            row.product?.prd_name ||
-            row.grp_name ||
-            "DHOTHIES SET-50072090";
-          const hsn = row.product?.hsn_code ? `-${row.product.hsn_code}` : "";
-          const fullPrdName = `DHOTHIES ${prdName}${hsn}`;
+      // Build Fast Lookup Maps
+      const ledgerMap = new Map<number, string>(
+        ledgers.map((l) => [l.ledg_code, l.ledg_name])
+      );
+      const productMap = new Map<number, any>(
+        products.map((p) => [p.ref_no, p])
+      );
 
-          const isSold = row.sold_status === "S";
-          const qty = row.qty || 1;
-          const inward = qty;
-          const outward = isSold ? qty : 0;
-          const closing = inward - outward;
-
-          const batchItem: BatchItem = {
-            sno: idx + 1,
-            batchNo: row.bar_no,
-            inward: inward,
-            outward: outward,
-            closing: closing,
-            purcRate: row.pc_pur_rate || 0,
-            costRate: row.cost_rate || row.pc_pur_rate || 0,
-            salesRate: row.pc_sale_rate || 0,
-            vendorName: row.ledger?.ledg_name || "SUPPLIER VENDOR",
-          };
-
-          if (!groupMap.has(fullPrdName)) {
-            groupMap.set(fullPrdName, []);
-          }
-          groupMap.get(fullPrdName)!.push(batchItem);
-        });
-
-        const liveGroups: ProductGroup[] = Array.from(groupMap.entries()).map(
-          ([productName, batches]) => {
-            const inward = batches.reduce((sum, b) => sum + b.inward, 0);
-            const outward = batches.reduce((sum, b) => sum + b.outward, 0);
-            const closing = batches.reduce((sum, b) => sum + b.closing, 0);
-            return {
-              productName,
-              batches,
-              totals: {
-                count: batches.length,
-                inward,
-                outward,
-                closing,
-              },
-            };
-          }
-        );
-
-        if (liveGroups.length > 0) {
-          setData(liveGroups);
-        } else {
-          setData(seedProductsData as ProductGroup[]);
-        }
+      if (barRows.length === 0) {
+        setData([]);
+        setLoading(false);
+        return;
       }
+
+      // 2. Process and Group Live Movement per Barcode / Batch Number
+      const groupMap = new Map<string, BatchItem[]>();
+
+      barRows.forEach((row: any, idx: number) => {
+        const prdObj = row.prcode ? productMap.get(row.prcode) : null;
+        const prdName =
+          prdObj?.prd_name ||
+          row.grp_name ||
+          "UNSPECIFIED PRODUCT";
+        const hsn = prdObj?.hsn_code ? `-${prdObj.hsn_code}` : "";
+        const fullPrdName = `Product Name: ${prdName}${hsn}`;
+
+        const status = (row.sold_status || "A").toUpperCase();
+        const baseQty = row.qty || 1;
+
+        // Transaction Movement Calculations:
+        // Purchase (Inward): Initial stock quantity created on purchase save
+        // Sales Return (Inward): Customer returned items add to inward
+        // Sales (Outward): Sold items add to outward
+        // Purchase Return (Outward): Returned items to supplier add to outward
+        let inward = baseQty;
+        let outward = 0;
+
+        if (status === "S") {
+          // Sales Outward
+          outward = baseQty;
+        } else if (status === "PR") {
+          // Purchase Return Outward
+          outward = baseQty;
+        } else if (status === "SR") {
+          // Sales Return Inward
+          inward = baseQty + 1; // returned back by customer
+          outward = 0;
+        }
+
+        const closing = Math.max(0, inward - outward);
+        const vendorName = row.cr_code
+          ? ledgerMap.get(row.cr_code) || "SUPPLIER VENDOR"
+          : "SUPPLIER VENDOR";
+
+        const batchItem: BatchItem = {
+          sno: idx + 1,
+          batchNo: row.bar_no,
+          inward: inward,
+          outward: outward,
+          closing: closing,
+          purcRate: row.pc_pur_rate || prdObj?.rate || 0,
+          costRate: row.cost_rate || row.pc_pur_rate || prdObj?.rate || 0,
+          salesRate: row.pc_sale_rate || prdObj?.sales_price || 0,
+          vendorName: vendorName,
+          soldStatus: status,
+        };
+
+        if (!groupMap.has(fullPrdName)) {
+          groupMap.set(fullPrdName, []);
+        }
+        groupMap.get(fullPrdName)!.push(batchItem);
+      });
+
+      // 3. Build Final Grouped Product Structures with Totals
+      const liveGroups: ProductGroup[] = Array.from(groupMap.entries()).map(
+        ([productName, batches]) => {
+          const inward = batches.reduce((sum, b) => sum + b.inward, 0);
+          const outward = batches.reduce((sum, b) => sum + b.outward, 0);
+          const closing = batches.reduce((sum, b) => sum + b.closing, 0);
+          return {
+            productName: productName.replace("Product Name: ", ""),
+            batches,
+            totals: {
+              count: batches.length,
+              inward,
+              outward,
+              closing,
+            },
+          };
+        }
+      );
+
+      setData(liveGroups);
     } catch (e) {
       console.error("Error loading barcode movement report:", e);
-      setData(seedProductsData as ProductGroup[]);
+      setData([]);
     } finally {
       setLoading(false);
     }
@@ -185,7 +233,6 @@ export default function BatchMovementReportPage() {
 
     return data
       .map((group) => {
-        // Filter product name dropdown
         if (selectedProduct && group.productName !== selectedProduct) {
           return null;
         }
@@ -202,7 +249,8 @@ export default function BatchMovementReportPage() {
 
           // Stock status filter
           if (stockStatus === "in_stock" && batch.closing <= 0) return false;
-          if (stockStatus === "sold" && batch.outward <= 0) return false;
+          if (stockStatus === "sold" && batch.soldStatus !== "S") return false;
+          if (stockStatus === "returned" && batch.soldStatus !== "PR" && batch.soldStatus !== "SR") return false;
 
           // Search term filter
           if (search) {
@@ -266,7 +314,7 @@ export default function BatchMovementReportPage() {
     };
   }, [filteredData]);
 
-  // Checkbox toggle handler
+  // Checkbox toggle handlers
   const toggleSelectBatch = (batchNo: string) => {
     setSelectedBatches((prev) => ({
       ...prev,
@@ -295,7 +343,7 @@ export default function BatchMovementReportPage() {
     setStockStatus("all");
   };
 
-  // Export to Excel (.xlsx / .xls) matching original Batch Movement format
+  // Export to Excel (.xlsx / .xls)
   const exportToExcel = () => {
     const rows: any[][] = [];
 
@@ -383,7 +431,7 @@ export default function BatchMovementReportPage() {
     XLSX.writeFile(workbook, `Batch_Movement_Report_${dateStr}.xlsx`);
   };
 
-  // Export to PDF (.pdf) matching original Batch Movement format
+  // Export to PDF (.pdf)
   const exportToPDF = () => {
     const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
 
@@ -530,12 +578,12 @@ export default function BatchMovementReportPage() {
           <div>
             <h1 className="text-xl font-bold tracking-tight">Batch Movement Report</h1>
             <p className="text-xs text-amber-100">
-              Track inward, outward, closing stock, rates, and suppliers per barcode batch
+              Live tracking linked across Purchase (Inward), Purchase Return (Outward), Sales (Outward), & Sales Return (Inward)
             </p>
           </div>
         </div>
 
-        {/* Action Download Buttons */}
+        {/* Action Download & Navigation Buttons */}
         <div className="flex items-center gap-2">
           <Button
             size="sm"
@@ -545,12 +593,13 @@ export default function BatchMovementReportPage() {
             disabled={loading}
           >
             <RefreshCw className={`h-3.5 w-3.5 mr-1 ${loading ? "animate-spin" : ""}`} />
-            Refresh
+            Refresh Data
           </Button>
           <Button
             size="sm"
             className="h-8 text-xs bg-emerald-600 hover:bg-emerald-700 text-white font-bold shadow"
             onClick={exportToExcel}
+            disabled={data.length === 0}
           >
             <FileSpreadsheet className="h-3.5 w-3.5 mr-1" />
             Download Excel (.xls)
@@ -559,6 +608,7 @@ export default function BatchMovementReportPage() {
             size="sm"
             className="h-8 text-xs bg-slate-900 hover:bg-slate-800 text-white font-bold shadow"
             onClick={exportToPDF}
+            disabled={data.length === 0}
           >
             <FileText className="h-3.5 w-3.5 mr-1" />
             Download PDF (.pdf)
@@ -652,7 +702,7 @@ export default function BatchMovementReportPage() {
               <Input
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                placeholder="Search KS01620 or Vendor..."
+                placeholder="Search KS02304 or Vendor..."
                 className="h-8 text-xs bg-background mt-1 font-mono"
               />
             </div>
@@ -701,7 +751,7 @@ export default function BatchMovementReportPage() {
             <div>
               <Label className="text-xs font-bold flex items-center gap-1">
                 <Boxes className="h-3.5 w-3.5 text-amber-600" />
-                Stock Status
+                Transaction Stock Status
               </Label>
               <div className="flex gap-2 mt-1">
                 <select
@@ -709,9 +759,10 @@ export default function BatchMovementReportPage() {
                   onChange={(e) => setStockStatus(e.target.value)}
                   className="flex h-8 flex-1 rounded-md border border-input bg-background px-2 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-amber-500"
                 >
-                  <option value="all">All Batches</option>
-                  <option value="in_stock">Closing Stock &gt; 0 (In Stock)</option>
-                  <option value="sold">Outward &gt; 0 (Sold)</option>
+                  <option value="all">All Movements</option>
+                  <option value="in_stock">In Stock (Closing &gt; 0)</option>
+                  <option value="sold">Sold (Sales Outward)</option>
+                  <option value="returned">Returned (Purchase/Sales Return)</option>
                 </select>
                 {(searchTerm || selectedProduct || selectedVendor || stockStatus !== "all") && (
                   <Button
@@ -732,16 +783,35 @@ export default function BatchMovementReportPage() {
       {/* Main Batch Movement Report Table */}
       <Card className="shadow-sm border overflow-hidden">
         <div className="p-3 bg-slate-800 text-white font-bold flex justify-between items-center text-xs">
-          <span>BATCH MOVEMENT REPORT DETAILS</span>
+          <span>LIVE BATCH MOVEMENT REPORT</span>
           <span>
             Showing {filteredData.length} Products ({kpis.totalBatches} Batches)
           </span>
         </div>
 
-        <div className="overflow-x-auto min-h-[400px] max-h-[650px]">
+        <div className="overflow-x-auto min-h-[350px] max-h-[600px]">
           {loading ? (
             <div className="p-12 text-center text-slate-500 font-bold">
               Loading Batch Movement Data...
+            </div>
+          ) : data.length === 0 ? (
+            <div className="p-12 text-center space-y-3">
+              <Boxes className="h-12 w-12 text-slate-300 mx-auto" />
+              <p className="text-sm font-bold text-slate-700 dark:text-slate-300">
+                No Batch Movement Transactions Found in Database
+              </p>
+              <p className="text-xs text-slate-500 max-w-md mx-auto">
+                Save a <strong>Purchase Transaction [F4]</strong> to generate barcode batches.
+                Every Purchase (Inward), Purchase Return (Outward), Sales (Outward), and Sales Return (Inward) will track live barcode movement here.
+              </p>
+              <Button
+                size="sm"
+                className="bg-amber-600 hover:bg-amber-700 text-white font-bold"
+                onClick={() => router.push("/transaction/purchase")}
+              >
+                <PlusCircle className="h-4 w-4 mr-1" />
+                Create Purchase Invoice Entry
+              </Button>
             </div>
           ) : filteredData.length === 0 ? (
             <div className="p-12 text-center text-slate-500 font-bold">
@@ -846,10 +916,10 @@ export default function BatchMovementReportPage() {
                           <TableCell className="font-mono font-bold text-amber-700 dark:text-amber-400 p-1">
                             {batch.batchNo}
                           </TableCell>
-                          <TableCell className="text-right font-mono p-1">
+                          <TableCell className="text-right font-mono p-1 text-emerald-700 dark:text-emerald-400 font-bold">
                             {batch.inward}
                           </TableCell>
-                          <TableCell className="text-right font-mono p-1">
+                          <TableCell className="text-right font-mono p-1 text-rose-700 dark:text-rose-400">
                             {batch.outward}
                           </TableCell>
                           <TableCell className="text-right font-mono font-bold text-slate-900 dark:text-white p-1">
@@ -896,36 +966,38 @@ export default function BatchMovementReportPage() {
         </div>
 
         {/* Grand Total Sticky Summary Footer Bar */}
-        <div className="bg-amber-500 text-white p-3 border-t flex flex-wrap items-center justify-between font-bold text-xs shadow-inner">
-          <div className="flex items-center gap-3">
-            <Boxes className="h-5 w-5" />
-            <span className="text-sm tracking-wide uppercase">GRAND TOTAL REPORT SUMMARY</span>
-          </div>
+        {data.length > 0 && (
+          <div className="bg-amber-500 text-white p-3 border-t flex flex-wrap items-center justify-between font-bold text-xs shadow-inner">
+            <div className="flex items-center gap-3">
+              <Boxes className="h-5 w-5" />
+              <span className="text-sm tracking-wide uppercase">GRAND TOTAL REPORT SUMMARY</span>
+            </div>
 
-          <div className="flex flex-wrap items-center gap-6 font-mono text-sm">
-            <span>
-              Batches: <span className="bg-amber-600 px-2 py-0.5 rounded">{kpis.totalBatches}</span>
-            </span>
-            <span>
-              Inward: <span className="bg-amber-600 px-2 py-0.5 rounded">{kpis.totalInward}</span>
-            </span>
-            <span>
-              Outward: <span className="bg-amber-600 px-2 py-0.5 rounded">{kpis.totalOutward}</span>
-            </span>
-            <span>
-              Closing Stock:{" "}
-              <span className="bg-white text-amber-900 px-2 py-0.5 rounded font-black">
-                {kpis.totalClosing}
+            <div className="flex flex-wrap items-center gap-6 font-mono text-sm">
+              <span>
+                Batches: <span className="bg-amber-600 px-2 py-0.5 rounded">{kpis.totalBatches}</span>
               </span>
-            </span>
-            <span>
-              Purc Valuation:{" "}
-              <span className="bg-amber-600 px-2 py-0.5 rounded">
-                ₹{kpis.totalPurcValue.toLocaleString("en-IN")}
+              <span>
+                Inward: <span className="bg-amber-600 px-2 py-0.5 rounded">{kpis.totalInward}</span>
               </span>
-            </span>
+              <span>
+                Outward: <span className="bg-amber-600 px-2 py-0.5 rounded">{kpis.totalOutward}</span>
+              </span>
+              <span>
+                Closing Stock:{" "}
+                <span className="bg-white text-amber-900 px-2 py-0.5 rounded font-black">
+                  {kpis.totalClosing}
+                </span>
+              </span>
+              <span>
+                Purc Valuation:{" "}
+                <span className="bg-amber-600 px-2 py-0.5 rounded">
+                  ₹{kpis.totalPurcValue.toLocaleString("en-IN")}
+                </span>
+              </span>
+            </div>
           </div>
-        </div>
+        )}
       </Card>
     </div>
   );
