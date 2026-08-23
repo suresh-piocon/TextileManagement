@@ -448,7 +448,10 @@ export default function RetailSalePOSPage() {
   // Keyboard Shortcuts Listener
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Insert") {
+      if (e.key === "Escape") {
+        setIsStockModalOpen(false);
+        setIsPaymentModalOpen(false);
+      } else if (e.key === "Insert") {
         e.preventDefault();
         scanInputRef.current?.focus();
       } else if (e.key === "F3") {

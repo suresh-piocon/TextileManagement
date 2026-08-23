@@ -98,6 +98,8 @@ export const DialogContent = React.forwardRef<HTMLDialogElement, React.HTMLAttri
       };
     }, [onOpenChange]);
 
+    if (!open) return null;
+
     return (
       <dialog
         ref={(node) => {
