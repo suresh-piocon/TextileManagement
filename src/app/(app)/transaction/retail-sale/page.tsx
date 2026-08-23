@@ -891,14 +891,8 @@ export default function RetailSalePOSPage() {
       {/* IMAGE 3: STOCK SELECTION POPUP MODAL (Stock : DESIGNER SAREE) */}
       <Dialog open={isStockModalOpen} onOpenChange={setIsStockModalOpen}>
         <DialogContent className="max-w-4xl max-h-[85vh] p-0 border">
-          <div className="bg-slate-300 dark:bg-slate-700 px-3 py-1.5 font-bold text-xs border-b text-slate-900 dark:text-slate-100 flex justify-between">
+          <div className="bg-slate-300 dark:bg-slate-700 px-3 py-1.5 font-bold text-xs border-b text-slate-900 dark:text-slate-100 flex justify-between items-center">
             <span>Stock : DESIGNER SAREE</span>
-            <button
-              onClick={() => setIsStockModalOpen(false)}
-              className="text-slate-600 hover:text-slate-900"
-            >
-              ✕
-            </button>
           </div>
 
           <div className="p-2 overflow-y-auto max-h-[420px]">
@@ -991,14 +985,8 @@ export default function RetailSalePOSPage() {
       {/* IMAGE 4: PAYMENT DETAILS MODAL (Payment Details [F8]) */}
       <Dialog open={isPaymentModalOpen} onOpenChange={setIsPaymentModalOpen}>
         <DialogContent className="max-w-2xl p-0 border">
-          <div className="bg-slate-200 dark:bg-slate-700 px-3 py-1.5 font-bold text-xs border-b text-slate-900 dark:text-slate-100 flex justify-between">
+          <div className="bg-slate-200 dark:bg-slate-700 px-3 py-1.5 font-bold text-xs border-b text-slate-900 dark:text-slate-100 flex justify-between items-center">
             <span>Payment Details [F8]</span>
-            <button
-              onClick={() => setIsPaymentModalOpen(false)}
-              className="text-slate-600 hover:text-slate-900"
-            >
-              ✕
-            </button>
           </div>
 
           <div className="p-3 space-y-2">
