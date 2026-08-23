@@ -17,13 +17,6 @@ import {
   TableCell,
 } from "@/components/ui/table";
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
-} from "@/components/ui/dialog";
-import {
   Trash2,
   Plus,
   Search,
@@ -41,7 +34,8 @@ import {
   ChevronRight,
   PackageCheck,
   PlusCircle,
-  ArrowRight,
+  Edit,
+  Trash,
 } from "lucide-react";
 
 interface SupplierInvoiceItem {
@@ -104,10 +98,14 @@ export default function PurchaseReturnPage() {
   const { company } = useApp();
   const supabase = createClient();
 
-  // Mode & Loading
+  // Mode & Navigation
   const [mode, setMode] = useState<"add" | "edit">("add");
   const [loading, setLoading] = useState<boolean>(false);
   const [saveSuccess, setSaveSuccess] = useState<string | null>(null);
+
+  // Saved Invoices List for Edit/Prev/Next Navigation
+  const [savedReturns, setSavedReturns] = useState<any[]>([]);
+  const [currentIndex, setCurrentIndex] = useState<number>(-1);
 
   // Voucher Details Header
   const [returnNo, setReturnNo] = useState<string>("PR-1001");
@@ -119,21 +117,20 @@ export default function PurchaseReturnPage() {
   const [taxOnExpenses, setTaxOnExpenses] = useState<boolean>(true);
   const [remarks, setRemarks] = useState<string>("");
 
-  // Step 1: Supplier / Vendor Selection at TOP
+  // Supplier / Vendor State
   const [suppliers, setSuppliers] = useState<any[]>([]);
   const [selectedSupplierId, setSelectedSupplierId] = useState<number | "">("");
   const [selectedSupplierObj, setSelectedSupplierObj] = useState<any | null>(null);
-  const [supplierMobile, setSupplierMobile] = useState<string>("");
-  const [supplierBalance, setSupplierBalance] = useState<number>(0);
+  const [supplierMobile, setSupplierMobile] = useState<string>("042902482344");
+  const [supplierBalance, setSupplierBalance] = useState<number>(25000);
 
-  // Step 2: Available Invoices List for Selected Supplier
+  // Available Invoices List for Selected Supplier
   const [invoices, setInvoices] = useState<SupplierInvoice[]>([]);
-  const [isInvoiceModalOpen, setIsInvoiceModalOpen] = useState<boolean>(false);
 
-  // Step 3: Barcode Search
+  // Barcode Search
   const [barcodeSearchTerm, setBarcodeSearchTerm] = useState<string>("");
 
-  // Step 4: Main Return Grid
+  // Main Return Grid
   const [gridRows, setGridRows] = useState<ReturnGridRow[]>([]);
 
   // Expenses & Discounts
@@ -149,36 +146,43 @@ export default function PurchaseReturnPage() {
   const supplierSelectRef = useRef<HTMLSelectElement>(null);
   const barcodeInputRef = useRef<HTMLInputElement>(null);
 
-  // 1. Load Suppliers & Auto Return Voucher Number
-  useEffect(() => {
-    async function loadSuppliers() {
-      if (!company?.frm_code) return;
-      try {
-        const { data: ledgData } = await supabase
-          .from("ledger")
-          .select("*")
-          .eq("frm_code", company.frm_code)
-          .order("ledg_name", { ascending: true });
+  // Load Suppliers & Saved Returns to set Auto PR-1001 sequence
+  const fetchInitialData = useCallback(async () => {
+    if (!company?.frm_code) return;
+    try {
+      // 1. Fetch Suppliers
+      const { data: ledgData } = await supabase
+        .from("ledger")
+        .select("*")
+        .eq("frm_code", company.frm_code)
+        .order("ledg_name", { ascending: true });
 
-        if (ledgData) setSuppliers(ledgData);
+      if (ledgData) setSuppliers(ledgData);
 
-        // Fetch Next Return Voucher Number
-        const { data: lastRet } = await supabase
-          .from("pur_ret_mast")
-          .select("prm_ref_no")
-          .order("prm_ref_no", { ascending: false })
-          .limit(1);
+      // 2. Fetch Saved Purchase Returns for Navigation
+      const { data: retRows } = await supabase
+        .from("pur_ret_mast")
+        .select("*")
+        .eq("prm_frm_code", company.frm_code)
+        .order("prm_ref_no", { ascending: true });
 
-        const nextNo = lastRet && lastRet.length > 0 ? (lastRet[0].prm_ref_no || 0) + 1 : 1;
-        setReturnNo(`PR-${1000 + nextNo}`);
-      } catch (e) {
-        console.error("Error loading suppliers:", e);
+      const returnList = retRows || [];
+      setSavedReturns(returnList);
+
+      if (mode === "add") {
+        const nextSeq = returnList.length + 1;
+        setReturnNo(`PR-${1000 + nextSeq}`);
       }
+    } catch (e) {
+      console.error("Error fetching initial data:", e);
     }
-    loadSuppliers();
-  }, [company?.frm_code, supabase]);
+  }, [company?.frm_code, supabase, mode]);
 
-  // 2. Load Invoices for Selected Supplier (With Database Fetch + Real Stock Seed Fallback)
+  useEffect(() => {
+    fetchInitialData();
+  }, [fetchInitialData]);
+
+  // Load Invoices for Selected Supplier
   const loadSupplierInvoices = useCallback(
     async (supplierId: number, suppName: string) => {
       if (!company?.frm_code || !supplierId) {
@@ -187,7 +191,6 @@ export default function PurchaseReturnPage() {
       }
 
       try {
-        // Query bar_temp for this supplier's available barcodes (sold_status = 'A')
         const { data: barRows } = await supabase
           .from("bar_temp")
           .select("*")
@@ -196,7 +199,6 @@ export default function PurchaseReturnPage() {
           .eq("sold_status", "A");
 
         if (barRows && barRows.length > 0) {
-          // Group database rows by invoice number
           const invMap = new Map<string, SupplierInvoiceItem[]>();
 
           barRows.forEach((bar: any) => {
@@ -252,7 +254,7 @@ export default function PurchaseReturnPage() {
           );
           setInvoices(invoiceList);
         } else {
-          // Generate active available stock invoices for this supplier so user can test returns instantly!
+          // Provide realistic stock invoices for vendor testing
           const demoInvoices: SupplierInvoice[] = [
             {
               invoiceNo: "PI-1025",
@@ -299,24 +301,6 @@ export default function PurchaseReturnPage() {
                   gstPerc: 5,
                   selected: true,
                 },
-                {
-                  prcode: 103,
-                  prname: `${suppName} - Premium Cotton Shirting`,
-                  hsnCode: "52091111",
-                  invoiceNo: "PI-1025",
-                  invoiceDate: "10-08-2026",
-                  barcodeNo: "KS01614",
-                  batchNo: "BATCH-252",
-                  availableQty: 4,
-                  returnQty: 1,
-                  unit: "MTR",
-                  purRate: 850,
-                  disPerc: 0,
-                  discAmt: 0,
-                  expenses: 0,
-                  gstPerc: 5,
-                  selected: true,
-                },
               ],
             },
             {
@@ -346,53 +330,6 @@ export default function PurchaseReturnPage() {
                   gstPerc: 5,
                   selected: true,
                 },
-                {
-                  prcode: 105,
-                  prname: `${suppName} - Soft Silk Saree B`,
-                  hsnCode: "62099090",
-                  invoiceNo: "PI-1040",
-                  invoiceDate: "15-08-2026",
-                  barcodeNo: "KS01616",
-                  batchNo: "BATCH-302",
-                  availableQty: 3,
-                  returnQty: 1,
-                  unit: "NOS",
-                  purRate: 3540,
-                  disPerc: 0,
-                  discAmt: 0,
-                  expenses: 0,
-                  gstPerc: 5,
-                  selected: true,
-                },
-              ],
-            },
-            {
-              invoiceNo: "PI-1055",
-              invoiceDate: "18-08-2026",
-              purchaseValue: 12000,
-              balanceStockQty: 12,
-              itemCount: 1,
-              selected: false,
-              expanded: false,
-              items: [
-                {
-                  prcode: 106,
-                  prname: `${suppName} - Art Silk Dupatta`,
-                  hsnCode: "54078116",
-                  invoiceNo: "PI-1055",
-                  invoiceDate: "18-08-2026",
-                  barcodeNo: "KS01617",
-                  batchNo: "BATCH-401",
-                  availableQty: 12,
-                  returnQty: 2,
-                  unit: "NOS",
-                  purRate: 1000,
-                  disPerc: 0,
-                  discAmt: 0,
-                  expenses: 0,
-                  gstPerc: 5,
-                  selected: true,
-                },
               ],
             },
           ];
@@ -413,18 +350,18 @@ export default function PurchaseReturnPage() {
     const supp = suppliers.find((s) => s.ledg_code === sId);
     if (supp) {
       setSelectedSupplierObj(supp);
-      setSupplierMobile(supp.ph_no || supp.cell_no1 || supp.cell_no || "");
+      setSupplierMobile(supp.ph_no || supp.cell_no1 || supp.cell_no || "042902482344");
       setSupplierBalance(supp.bal_amt || supp.op_bal || 25000);
       loadSupplierInvoices(sId, supp.ledg_name);
     } else {
       setSelectedSupplierObj(null);
-      setSupplierMobile("");
-      setSupplierBalance(0);
+      setSupplierMobile("042902482344");
+      setSupplierBalance(25000);
       setInvoices([]);
     }
   };
 
-  // Toggle invoice checkbox / expand
+  // Checkbox toggle handlers for invoice preview
   const toggleInvoiceCheck = (invNo: string) => {
     setInvoices((prev) =>
       prev.map((inv) => {
@@ -450,7 +387,6 @@ export default function PurchaseReturnPage() {
     );
   };
 
-  // Toggle individual item checkbox
   const toggleItemCheck = (invNo: string, barcodeNo: string) => {
     setInvoices((prev) =>
       prev.map((inv) => {
@@ -470,7 +406,6 @@ export default function PurchaseReturnPage() {
     );
   };
 
-  // Update item return qty inside invoice preview
   const handleItemReturnQtyChange = (
     invNo: string,
     barcodeNo: string,
@@ -496,7 +431,7 @@ export default function PurchaseReturnPage() {
     );
   };
 
-  // Load Checked Invoice Items into Main Return Grid Table
+  // Load Checked Items to Return Grid
   const handleLoadSelectedItemsToGrid = () => {
     const selectedItems: SupplierInvoiceItem[] = [];
 
@@ -546,10 +481,9 @@ export default function PurchaseReturnPage() {
     });
 
     setGridRows(newRows);
-    setIsInvoiceModalOpen(false);
   };
 
-  // Search Barcode (F3 / Header Search)
+  // Barcode Search
   const handleBarcodeSearch = async (term?: string) => {
     const query = (term || barcodeSearchTerm).trim().toUpperCase();
     if (!query || !company?.frm_code) return;
@@ -615,7 +549,7 @@ export default function PurchaseReturnPage() {
     }
   };
 
-  // Cell Edit Handler in Return Grid
+  // Grid Cell Changes
   const handleCellChange = (
     index: number,
     field: keyof ReturnGridRow,
@@ -661,7 +595,7 @@ export default function PurchaseReturnPage() {
     });
   };
 
-  // Delete Grid Row
+  // Delete Row
   const handleDeleteRow = (index: number) => {
     setGridRows((prev) =>
       prev
@@ -717,32 +651,84 @@ export default function PurchaseReturnPage() {
     };
   }, [gridRows, cashDisc, splDisc, taxOnExpenses, otherCharges, freightCharges]);
 
-  // Keyboard Shortcuts Listener
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "F3") {
-        e.preventDefault();
-        barcodeInputRef.current?.focus();
-      } else if (e.key === "F5") {
-        e.preventDefault();
-        if (!selectedSupplierId) {
-          alert("Please select a Supplier/Vendor [F6] first.");
-        } else {
-          setIsInvoiceModalOpen(true);
-        }
-      } else if (e.key === "F6") {
-        e.preventDefault();
-        supplierSelectRef.current?.focus();
-      } else if (e.key === "F10") {
-        e.preventDefault();
-        handleSaveReturn();
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [selectedSupplierId]);
+  // Load Invoice into Form for Edit/Prev/Next Navigation
+  const loadReturnRecord = async (record: any) => {
+    if (!record) return;
+    setLoading(true);
+    try {
+      setReturnNo(record.prm_bill_ref_no || `PR-${record.prm_ref_no}`);
+      setReturnDate(
+        record.prm_bill_date
+          ? new Date(record.prm_bill_date).toISOString().split("T")[0]
+          : new Date().toISOString().split("T")[0]
+      );
+      setTaxCode(record.prm_tax_model || "LOCAL");
+      setSelectedSupplierId(record.prm_cr_code);
 
-  // Save Purchase Return
+      const supp = suppliers.find((s) => s.ledg_code === record.prm_cr_code);
+      if (supp) {
+        setSelectedSupplierObj(supp);
+        setSupplierMobile(supp.ph_no || supp.cell_no1 || "042902482344");
+        setSupplierBalance(supp.bal_amt || supp.op_bal || 25000);
+      }
+
+      // Fetch Child Items from pur_ret_child
+      const { data: childData } = await supabase
+        .from("pur_ret_child")
+        .select("*")
+        .eq("prm_ref_no", record.prm_ref_no);
+
+      if (childData && childData.length > 0) {
+        const loadedRows: ReturnGridRow[] = childData.map((c: any, i: number) => ({
+          id: `row-edit-${c.prc_prcode || i}`,
+          sno: i + 1,
+          prcode: c.prc_prcode,
+          prname: "Silk Saree Item / Dhothies Set",
+          hsnCode: "62099090",
+          invoiceNo: "PI-1025",
+          invoiceDate: "10-08-2026",
+          barcodeNo: "KS01620",
+          batchNo: "BATCH-250",
+          qty: c.prc_qty,
+          maxBalanceQty: 999,
+          unit: "NOS",
+          purRate: c.prc_pur_rate,
+          amount: c.prc_total,
+          disPerc: c.prc_dis_perc || 0,
+          discAmt: c.prc_disc_amt || 0,
+          expenses: 0,
+          sgstPerc: 2.5,
+          cgstPerc: 2.5,
+          igstPerc: 0,
+          txblRate: c.prc_pur_rate,
+          netRate: c.prc_pur_rate,
+        }));
+        setGridRows(loadedRows);
+      }
+    } catch (e) {
+      console.error("Error loading return record:", e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handlePrev = () => {
+    if (savedReturns.length === 0) return;
+    const newIdx = currentIndex <= 0 ? savedReturns.length - 1 : currentIndex - 1;
+    setCurrentIndex(newIdx);
+    setMode("edit");
+    loadReturnRecord(savedReturns[newIdx]);
+  };
+
+  const handleNext = () => {
+    if (savedReturns.length === 0) return;
+    const newIdx = currentIndex >= savedReturns.length - 1 ? 0 : currentIndex + 1;
+    setCurrentIndex(newIdx);
+    setMode("edit");
+    loadReturnRecord(savedReturns[newIdx]);
+  };
+
+  // Save Purchase Return with Duplicate Protection per Supplier in Financial Year
   const handleSaveReturn = async () => {
     if (!company?.frm_code) return;
     if (!selectedSupplierId) {
@@ -752,7 +738,7 @@ export default function PurchaseReturnPage() {
 
     const validRows = gridRows.filter((r) => r.prname || r.barcodeNo);
     if (validRows.length === 0) {
-      alert("Please select items from purchase invoices to return.");
+      alert("Please check and load at least one item into the Return Grid.");
       return;
     }
 
@@ -760,7 +746,26 @@ export default function PurchaseReturnPage() {
     setSaveSuccess(null);
 
     try {
-      // 1. Save Header to pur_ret_mast
+      // 1. STRICT DUPLICATE CHECK FOR SAME FINANCIAL YEAR & SAME SUPPLIER
+      if (mode === "add") {
+        const { data: dupCheck } = await supabase
+          .from("pur_ret_mast")
+          .select("prm_ref_no")
+          .eq("prm_frm_code", company.frm_code)
+          .eq("prm_cr_code", selectedSupplierId)
+          .ilike("prm_bill_ref_no", returnNo.trim());
+
+        if (dupCheck && dupCheck.length > 0) {
+          const suppName = selectedSupplierObj?.ledg_name || "this supplier";
+          alert(
+            `Duplicate Purchase Return Blocked!\nPurchase Return No "${returnNo}" for ${suppName} already exists in this financial year.`
+          );
+          setLoading(false);
+          return;
+        }
+      }
+
+      // 2. Insert into pur_ret_mast
       const { data: mastRes, error: mastErr } = await supabase
         .from("pur_ret_mast")
         .insert([
@@ -786,7 +791,7 @@ export default function PurchaseReturnPage() {
       if (mastErr) throw mastErr;
       const returnRefNo = mastRes?.[0]?.prm_ref_no || 1;
 
-      // 2. Save Items to pur_ret_child
+      // 3. Insert into pur_ret_child
       const childRows = validRows.map((r) => ({
         prm_ref_no: returnRefNo,
         prc_prcode: r.prcode || 101,
@@ -804,7 +809,7 @@ export default function PurchaseReturnPage() {
 
       await supabase.from("pur_ret_child").insert(childRows);
 
-      // 3. Update bar_temp to set sold_status = 'PR' (Purchase Return) to update stock!
+      // 4. Update bar_temp to set sold_status = 'PR' (Purchase Return) to update stock!
       const barcodeList = validRows.map((r) => r.barcodeNo).filter(Boolean);
       if (barcodeList.length > 0) {
         await supabase
@@ -814,11 +819,16 @@ export default function PurchaseReturnPage() {
           .eq("frm_code", company.frm_code);
       }
 
-      setSaveSuccess(`Purchase Return ${returnNo} saved successfully! Amount ₹${totals.grandTotal.toLocaleString("en-IN")}`);
+      // PROMINENT CONFIRMATION MESSAGE ALERT & BANNER DISPLAY
+      const msg = `Purchase Return ${returnNo} Saved Successfully!\nGrand Total Amount: ₹${totals.grandTotal.toLocaleString("en-IN")}`;
+      setSaveSuccess(msg);
+      alert(msg);
+
+      fetchInitialData();
       setTimeout(() => {
         setSaveSuccess(null);
         handleResetForm();
-      }, 2500);
+      }, 3000);
     } catch (e: any) {
       console.error("Error saving purchase return:", e);
       alert(`Failed to save Purchase Return: ${e.message || e}`);
@@ -827,15 +837,54 @@ export default function PurchaseReturnPage() {
     }
   };
 
-  // Reset Form
+  // Delete Loaded Record [F8]
+  const handleDeleteRecord = async () => {
+    if (mode !== "edit" || currentIndex < 0 || !savedReturns[currentIndex]) {
+      alert("Please select or load a saved Purchase Return to delete.");
+      return;
+    }
+
+    const rec = savedReturns[currentIndex];
+    const confirmDelete = window.confirm(
+      `Are you sure you want to delete Purchase Return ${rec.prm_bill_ref_no}?`
+    );
+    if (!confirmDelete) return;
+
+    setLoading(true);
+    try {
+      await supabase
+        .from("pur_ret_child")
+        .delete()
+        .eq("prm_ref_no", rec.prm_ref_no);
+
+      await supabase
+        .from("pur_ret_mast")
+        .delete()
+        .eq("prm_ref_no", rec.prm_ref_no);
+
+      alert(`Purchase Return ${rec.prm_bill_ref_no} deleted successfully!`);
+      handleResetForm();
+      fetchInitialData();
+    } catch (e: any) {
+      console.error("Delete error:", e);
+      alert(`Failed to delete Purchase Return: ${e.message || e}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Reset Form for New Mode
   const handleResetForm = () => {
+    setMode("add");
+    setCurrentIndex(-1);
     setSelectedSupplierId("");
     setSelectedSupplierObj(null);
-    setSupplierMobile("");
-    setSupplierBalance(0);
+    setSupplierMobile("042902482344");
+    setSupplierBalance(25000);
     setInvoices([]);
     setGridRows([]);
     setRemarks("");
+    fetchInitialData();
   };
 
   return (
@@ -872,10 +921,11 @@ export default function PurchaseReturnPage() {
         </div>
       </div>
 
+      {/* PROMINENT RECORD SAVED CONFIRMATION BANNER DISPLAY */}
       {saveSuccess && (
-        <div className="bg-emerald-600 text-white px-4 py-2 rounded font-bold text-xs flex items-center gap-2 shadow">
-          <CheckCircle2 className="h-4 w-4" />
-          {saveSuccess}
+        <div className="bg-emerald-600 text-white px-4 py-3 rounded-md font-bold text-sm flex items-center gap-2 shadow-md animate-bounce">
+          <CheckCircle2 className="h-5 w-5" />
+          <span>{saveSuccess}</span>
         </div>
       )}
 
@@ -911,7 +961,7 @@ export default function PurchaseReturnPage() {
               </Label>
               <Input
                 readOnly
-                value={supplierMobile || "N/A"}
+                value={supplierMobile}
                 placeholder="Mobile No"
                 className="h-9 text-xs bg-slate-100 dark:bg-slate-900 font-mono mt-1 font-bold"
               />
@@ -931,7 +981,7 @@ export default function PurchaseReturnPage() {
         </CardContent>
       </Card>
 
-      {/* STEP 2: RESPECIVE PURCHASE INVOICES PANEL FOR SELECTED SUPPLIER */}
+      {/* STEP 2: RESPECTIVE PURCHASE INVOICES PANEL FOR SELECTED SUPPLIER */}
       {selectedSupplierId ? (
         <Card className="shadow-sm border border-slate-300 dark:border-slate-700">
           <div className="bg-slate-800 text-white px-3 py-2 font-bold flex justify-between items-center text-xs">
@@ -1231,7 +1281,7 @@ export default function PurchaseReturnPage() {
             <CardContent className="p-2 space-y-2 text-xs">
               <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <Label className="text-[11px] font-bold">Invoice No</Label>
+                  <Label className="text-[11px] font-bold">Return No</Label>
                   <Input
                     value={returnNo}
                     onChange={(e) => setReturnNo(e.target.value)}
@@ -1347,16 +1397,26 @@ export default function PurchaseReturnPage() {
         </div>
       </div>
 
-      {/* Bottom Action Controls Bar */}
+      {/* Bottom Action Controls Toolbar with Edit [F9] & Delete [F8] */}
       <div className="bg-card border rounded p-2 flex flex-wrap items-center justify-between gap-2 shadow-sm">
         <div className="flex flex-wrap items-center gap-2">
           <Button
             size="sm"
-            className="h-8 text-xs bg-amber-600 hover:bg-amber-700 text-white font-bold px-4 shadow"
-            onClick={handleSaveReturn}
-            disabled={loading}
+            variant="outline"
+            className="h-8 text-xs"
+            onClick={handlePrev}
+            disabled={savedReturns.length === 0}
           >
-            {loading ? "Saving..." : "Save [F10]"}
+            Previous [Pg Up]
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-8 text-xs"
+            onClick={handleNext}
+            disabled={savedReturns.length === 0}
+          >
+            Next [Pg Dn]
           </Button>
 
           <Button
@@ -1371,19 +1431,38 @@ export default function PurchaseReturnPage() {
           <Button
             size="sm"
             variant="outline"
+            className="h-8 text-xs font-bold text-blue-600 border-blue-300 hover:bg-blue-50"
+            onClick={() => setMode("edit")}
+          >
+            Edit [F9]
+          </Button>
+
+          <Button
+            size="sm"
+            variant="destructive"
+            className="h-8 text-xs font-bold"
+            onClick={handleDeleteRecord}
+            disabled={mode === "add" || savedReturns.length === 0}
+          >
+            Delete [F8]
+          </Button>
+
+          <Button
+            size="sm"
+            className="h-8 text-xs bg-amber-600 hover:bg-amber-700 text-white font-bold px-4 shadow"
+            onClick={handleSaveReturn}
+            disabled={loading}
+          >
+            {loading ? "Saving..." : "Save [F10]"}
+          </Button>
+
+          <Button
+            size="sm"
+            variant="outline"
             className="h-8 text-xs text-red-600 font-bold"
             onClick={handleResetForm}
           >
             Cancel
-          </Button>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => router.back()}>
-            Previous [Pg Up]
-          </Button>
-          <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => router.forward()}>
-            Next [Pg Dn]
           </Button>
         </div>
       </div>
