@@ -19,9 +19,6 @@ import {
 import {
   Dialog,
   DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
 } from "@/components/ui/dialog";
 import {
   Barcode,
@@ -51,7 +48,6 @@ interface POSGridRow {
   productName: string;
   qty: number;
   unitName: string;
-  unit: number;
   gross: number;
   rateUnit: number;
   amount: number;
@@ -84,14 +80,14 @@ export default function RetailSalePOSPage() {
   const [scanInput, setScanInput] = useState<string>("");
   const scanInputRef = useRef<HTMLInputElement>(null);
 
-  // Stock Summary Banner line (Image 2: C-Rate: T.TT, S-Rate: T.TT : Stock : 10 PCS)
+  // Stock Summary Banner line (Image 3: C-Rate: T.TT, S-Rate: T.TT : Stock : 23 PCS)
   const [stockBannerText, setStockBannerText] = useState<string>(
-    "C-Rate: T.TT, S-Rate: T.TT : Stock : 30 PCS"
+    "C-Rate: T.TT, S-Rate: T.TT : Stock : 23 PCS"
   );
 
-  // Voucher Details Panel (Image 2)
+  // Voucher Details Panel (Image 3)
   const [invoiceNo, setInvoiceNo] = useState<string>("1");
-  const [invoiceTime, setInvoiceTime] = useState<string>("08:20:55");
+  const [invoiceTime, setInvoiceTime] = useState<string>("17:48:48");
   const [invoiceDate, setInvoiceDate] = useState<string>(
     new Date().toISOString().split("T")[0]
   );
@@ -101,12 +97,10 @@ export default function RetailSalePOSPage() {
   const [expensesAmt, setExpensesAmt] = useState<number>(0);
   const [remarks, setRemarks] = useState<string>("");
 
-  // Customer Details Bar (Image 2)
+  // Customer Details Bar (Image 3)
   const [customerMobile, setCustomerMobile] = useState<string>("");
   const [customerName, setCustomerName] = useState<string>("Sumit");
   const [customerEmail, setCustomerEmail] = useState<string>("");
-  const [customerBalance, setCustomerBalance] = useState<number>(10000);
-  const [customerBday, setCustomerBday] = useState<string>("");
 
   // Customers & Stock Lists from DB
   const [customers, setCustomers] = useState<any[]>([]);
@@ -117,20 +111,19 @@ export default function RetailSalePOSPage() {
   // Main POS Grid Rows
   const [gridRows, setGridRows] = useState<POSGridRow[]>([]);
 
-  // Modals state: Stock Modal (Image 3) and Payment Modal (Image 4)
-  // DO NOT AUTO OPEN STOCK MODAL ON LOAD PER USER DIRECTIVE
+  // Modals state: Stock Modal (Image 2) and Payment Modal (Image 1)
+  // NEVER AUTO-OPEN ON SCREEN LOAD
   const [isStockModalOpen, setIsStockModalOpen] = useState<boolean>(false);
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState<boolean>(false);
 
-  // Stock Modal Selected Row (Image 3)
+  // Stock Modal Highlighted Row Index (Image 2)
   const [selectedStockRowIndex, setSelectedStockRowIndex] = useState<number>(0);
 
-  // Payment Breakdown Table (Image 4)
+  // Payment Breakdown Table (Image 1: CASH, CN/ADVANCE, CARD, UPI / QR CODE)
   const [paymentRows, setPaymentRows] = useState<PaymentRow[]>([
     { type: "CASH", amount: 0, remarks: "" },
     { type: "CN/ADVANCE", amount: 0, remarks: "" },
-    { type: "HDFC CARD", amount: 0, remarks: "" },
-    { type: "KOTAK", amount: 0, remarks: "" },
+    { type: "CARD", amount: 0, remarks: "" },
     { type: "UPI / QR CODE", amount: 0, remarks: "" },
   ]);
 
@@ -142,7 +135,6 @@ export default function RetailSalePOSPage() {
   const fetchInitialData = useCallback(async () => {
     if (!company?.frm_code) return;
     try {
-      // Update Invoice Time
       setInvoiceTime(new Date().toLocaleTimeString());
 
       // 1. Fetch Customers
@@ -169,23 +161,58 @@ export default function RetailSalePOSPage() {
         );
       }
 
+      // 3. Fetch Sold Barcodes for Previous / Next Navigation
+      const { data: soldData } = await supabase
+        .from("bar_temp")
+        .select("*")
+        .eq("frm_code", company.frm_code)
+        .eq("sold_status", "S")
+        .order("bar_ref_id", { ascending: true });
+
+      if (soldData) setSavedInvoices(soldData);
+
       // Auto Invoice Number
       if (mode === "add") {
-        setInvoiceNo(`${(savedInvoices.length || 0) + 1}`);
+        setInvoiceNo(`${(soldData?.length || 0) + 1}`);
       }
     } catch (e) {
       console.error("Error fetching initial POS data:", e);
     }
-  }, [company?.frm_code, supabase, mode, savedInvoices.length]);
+  }, [company?.frm_code, supabase, mode]);
 
   useEffect(() => {
     fetchInitialData();
   }, [fetchInitialData]);
 
-  // Focus Scan Box on Open & Reset (DO NOT AUTO-OPEN STOCK MODAL)
+  // Focus Scan Box on Load
   useEffect(() => {
     scanInputRef.current?.focus();
   }, []);
+
+  // Stock Selection Modal Keyboard Up/Down Arrow Navigation (Image 2)
+  useEffect(() => {
+    if (!isStockModalOpen) return;
+    const handleStockModalKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setSelectedStockRowIndex((prev) =>
+          Math.min(prev + 1, stockItems.length - 1)
+        );
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setSelectedStockRowIndex((prev) => Math.max(prev - 1, 0));
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        if (stockItems[selectedStockRowIndex]) {
+          addStockItemToGrid(stockItems[selectedStockRowIndex]);
+          setIsStockModalOpen(false);
+        }
+      }
+    };
+
+    window.addEventListener("keydown", handleStockModalKeyDown);
+    return () => window.removeEventListener("keydown", handleStockModalKeyDown);
+  }, [isStockModalOpen, stockItems, selectedStockRowIndex]);
 
   // Barcode / Product Code Scan Handler
   const handleScanProductCode = async (inputVal?: string) => {
@@ -228,8 +255,9 @@ export default function RetailSalePOSPage() {
           addStockItemToGrid(bar);
           setScanInput("");
         } else {
-          // Multiple matches found -> Open Stock Selection Window (Image 3)
+          // Multiple matches found -> Open Stock Selection Window (Image 2)
           setStockItems(barRows);
+          setSelectedStockRowIndex(0);
           setIsStockModalOpen(true);
         }
       } else {
@@ -243,8 +271,7 @@ export default function RetailSalePOSPage() {
 
   // Add Item to POS Grid
   const addStockItemToGrid = (bar: any) => {
-    const saleRate = bar.pc_sale_rate || bar.tag_rate || 10000;
-    const purRate = bar.pc_pur_rate || 8500;
+    const saleRate = bar.pc_sale_rate || bar.tag_rate || 1500;
 
     const newRow: POSGridRow = {
       id: `pos-item-${bar.bar_no}-${Date.now()}`,
@@ -252,10 +279,9 @@ export default function RetailSalePOSPage() {
       productCode: bar.bar_no,
       batchNo: bar.bar_no,
       prcode: bar.prcode || 101,
-      productName: bar.grp_name || "DESIGNER SAREE",
+      productName: bar.grp_name || "PURE SILK",
       qty: 1,
-      unitName: bar.unit_name || "PCS",
-      unit: 1,
+      unitName: bar.unit_name || "NOS",
       gross: 1,
       rateUnit: saleRate,
       amount: saleRate,
@@ -308,7 +334,7 @@ export default function RetailSalePOSPage() {
     );
   };
 
-  // Calculations Summary (Image 2 Voucher Details Panel)
+  // Calculations Summary (Image 3 Voucher Details Panel)
   const totals = useMemo(() => {
     let totalQty = 0;
     let subTotal = 0;
@@ -351,19 +377,17 @@ export default function RetailSalePOSPage() {
     };
   }, [gridRows, cashDisc, splDisc, expensesAmt]);
 
-  // Open Payment Details Modal (Image 4)
+  // Open Payment Details Modal (Image 1)
   const handleOpenPaymentModal = () => {
     if (gridRows.length === 0) {
-      alert("Please scan at least one saree/product to create POS invoice.");
+      alert("Please scan at least one barcode item to create POS invoice.");
       return;
     }
 
-    // Set default Cash payment equal to Net Total
     setPaymentRows([
       { type: "CASH", amount: totals.grandTotal, remarks: "" },
       { type: "CN/ADVANCE", amount: 0, remarks: "" },
-      { type: "HDFC CARD", amount: 0, remarks: "" },
-      { type: "KOTAK", amount: 0, remarks: "" },
+      { type: "CARD", amount: 0, remarks: "" },
       { type: "UPI / QR CODE", amount: 0, remarks: "" },
     ]);
 
@@ -387,7 +411,7 @@ export default function RetailSalePOSPage() {
     });
   };
 
-  // Confirm & Save POS Invoice (Image 4 Save [F10])
+  // Confirm & Save POS Invoice (Image 1 Save [F10])
   const handleFinalSaveInvoice = async () => {
     if (!company?.frm_code) return;
 
@@ -431,7 +455,56 @@ export default function RetailSalePOSPage() {
     }
   };
 
-  // Reset Form (Image 2 New [F4])
+  // Load Saved Invoice for Prev / Next Navigation
+  const loadSavedInvoiceRecord = (barRecord: any) => {
+    if (!barRecord) return;
+    setInvoiceNo(`POS-${barRecord.bar_ref_id || 1}`);
+    const rate = barRecord.pc_sale_rate || 1500;
+    const row: POSGridRow = {
+      id: `pos-prev-${barRecord.bar_no}`,
+      sno: 1,
+      productCode: barRecord.bar_no,
+      batchNo: barRecord.bar_no,
+      prcode: barRecord.prcode || 101,
+      productName: barRecord.grp_name || "PURE SILK",
+      qty: 1,
+      unitName: barRecord.unit_name || "NOS",
+      gross: 1,
+      rateUnit: rate,
+      amount: rate,
+      disPerc: 0,
+      sgstPerc: 6,
+      cgstPerc: 6,
+      igstPerc: 0,
+      isBatchItem: false,
+      maxStockQty: 1,
+    };
+    setGridRows([row]);
+  };
+
+  const handlePrevInvoice = () => {
+    if (savedInvoices.length === 0) {
+      alert("No previous saved POS invoices found.");
+      return;
+    }
+    const newIdx = currentIndex <= 0 ? savedInvoices.length - 1 : currentIndex - 1;
+    setCurrentIndex(newIdx);
+    setMode("edit");
+    loadSavedInvoiceRecord(savedInvoices[newIdx]);
+  };
+
+  const handleNextInvoice = () => {
+    if (savedInvoices.length === 0) {
+      alert("No next saved POS invoices found.");
+      return;
+    }
+    const newIdx = currentIndex >= savedInvoices.length - 1 ? 0 : currentIndex + 1;
+    setCurrentIndex(newIdx);
+    setMode("edit");
+    loadSavedInvoiceRecord(savedInvoices[newIdx]);
+  };
+
+  // Reset Form (Image 3 New [F4])
   const handleResetForm = () => {
     setMode("add");
     setCurrentIndex(-1);
@@ -472,6 +545,9 @@ export default function RetailSalePOSPage() {
         e.preventDefault();
         const custElem = document.getElementById("pos-cust-mobile");
         custElem?.focus();
+      } else if (e.key === "F8") {
+        e.preventDefault();
+        if (!isPaymentModalOpen) handleOpenPaymentModal();
       } else if (e.key === "F10") {
         e.preventDefault();
         if (isPaymentModalOpen) {
@@ -479,15 +555,21 @@ export default function RetailSalePOSPage() {
         } else {
           handleOpenPaymentModal();
         }
+      } else if (e.key === "PageUp") {
+        e.preventDefault();
+        handlePrevInvoice();
+      } else if (e.key === "PageDown") {
+        e.preventDefault();
+        handleNextInvoice();
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [gridRows, totals.grandTotal, isPaymentModalOpen, isStockModalOpen, stockItems, selectedStockRowIndex]);
+  }, [gridRows, totals.grandTotal, isPaymentModalOpen, isStockModalOpen, stockItems, selectedStockRowIndex, savedInvoices, currentIndex]);
 
   return (
     <div className="min-h-screen bg-slate-200 dark:bg-slate-900 p-1.5 space-y-1.5 font-sans text-xs">
-      {/* Top POS Header Bar (Image 2) */}
+      {/* Top POS Header Bar (Image 3) */}
       <div className="bg-lime-600 text-white px-3 py-1.5 rounded flex items-center justify-between shadow-sm">
         <div className="flex items-center gap-2">
           <div className="bg-white text-lime-700 rounded-full w-6 h-6 flex items-center justify-center font-black text-sm">
@@ -513,7 +595,7 @@ export default function RetailSalePOSPage() {
         </div>
       )}
 
-      {/* Step 1 & 2: Top Scan Input Bar & Stock Indicator (Image 2) */}
+      {/* Step 1 & 2: Top Scan Input Bar & Stock Indicator (Image 3) */}
       <div className="bg-slate-100 dark:bg-slate-800 p-2 rounded border border-slate-300 dark:border-slate-700 space-y-1">
         <div className="flex flex-wrap items-center gap-2">
           <div className="w-24">
@@ -548,14 +630,20 @@ export default function RetailSalePOSPage() {
               <Button
                 size="sm"
                 className="h-7 text-xs bg-slate-200 text-slate-800 border hover:bg-slate-300 font-bold px-3"
-                onClick={() => setIsStockModalOpen(true)}
+                onClick={() => {
+                  setSelectedStockRowIndex(0);
+                  setIsStockModalOpen(true);
+                }}
               >
                 Select [F5]
               </Button>
               <Button
                 size="sm"
                 className="h-7 text-xs bg-slate-200 text-slate-800 border hover:bg-slate-300 font-bold px-3"
-                onClick={() => setIsStockModalOpen(true)}
+                onClick={() => {
+                  setSelectedStockRowIndex(0);
+                  setIsStockModalOpen(true);
+                }}
               >
                 Search [F3]
               </Button>
@@ -563,16 +651,16 @@ export default function RetailSalePOSPage() {
           </div>
         </div>
 
-        {/* Stock Banner Summary Line (Image 2: C-Rate: T.TT, S-Rate: T.TT : Stock : 10 PCS) */}
+        {/* Stock Banner Summary Line (Image 3: C-Rate: T.TT, S-Rate: T.TT : Stock : 23 PCS) */}
         <div className="bg-sky-50 dark:bg-sky-950/60 border border-sky-200 text-sky-800 dark:text-sky-200 px-3 py-1 rounded text-[11px] font-mono font-bold flex justify-between">
           <span>{stockBannerText}</span>
           <span>Shift+F7: Change Product Name</span>
         </div>
       </div>
 
-      {/* STEP 3 & MAIN LAYOUT: GRID TABLE (LEFT 3 COLS) & VOUCHER DETAILS PANEL (RIGHT 1 COL) */}
+      {/* STEP 3 & MAIN LAYOUT: GRID TABLE & VOUCHER DETAILS PANEL */}
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-1.5">
-        {/* Main Grid Table (Image 2) */}
+        {/* Main Grid Table (Image 3) */}
         <div className="lg:col-span-3 space-y-1.5">
           <Card className="shadow-sm border overflow-hidden">
             <div className="overflow-x-auto min-h-[340px] max-h-[480px]">
@@ -583,22 +671,21 @@ export default function RetailSalePOSPage() {
                     <TableHead className="w-8 text-center p-1 font-bold">S...</TableHead>
                     <TableHead className="w-24 p-1 font-bold">Product Code</TableHead>
                     <TableHead className="min-w-[180px] p-1 font-bold">Product Name [Shift+F7]</TableHead>
-                    <TableHead className="w-12 text-right p-1 font-bold">Qty</TableHead>
-                    <TableHead className="w-16 p-1 font-bold">Unit Name</TableHead>
-                    <TableHead className="w-12 text-right p-1 font-bold">Unit</TableHead>
+                    <TableHead className="w-16 text-right p-1 font-bold">Qty</TableHead>
+                    <TableHead className="w-20 text-center p-1 font-bold">Unit Name</TableHead>
                     <TableHead className="w-14 text-right p-1 font-bold">Gross</TableHead>
-                    <TableHead className="w-20 text-right p-1 font-bold">Rate/Unit</TableHead>
-                    <TableHead className="w-20 text-right p-1 font-bold">Amount</TableHead>
+                    <TableHead className="w-24 text-right p-1 font-bold">Rate/Unit</TableHead>
+                    <TableHead className="w-24 text-right p-1 font-bold">Amount</TableHead>
                     <TableHead className="w-12 text-right p-1 font-bold">Dis %</TableHead>
-                    <TableHead className="w-12 text-right p-1 font-bold">SGST</TableHead>
-                    <TableHead className="w-12 text-right p-1 font-bold">CGST</TableHead>
+                    <TableHead className="w-14 text-right p-1 font-bold">SGST</TableHead>
+                    <TableHead className="w-14 text-right p-1 font-bold">CGST</TableHead>
                   </TableRow>
                 </TableHeader>
 
                 <TableBody className="text-xs font-mono">
                   {gridRows.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={13} className="text-center p-12 text-slate-400 font-bold">
+                      <TableCell colSpan={12} className="text-center p-12 text-slate-400 font-bold">
                         Scan Saree Barcode or Product Code above to add to invoice.
                       </TableCell>
                     </TableRow>
@@ -622,31 +709,38 @@ export default function RetailSalePOSPage() {
                         <TableCell className="p-1 font-bold text-slate-800 dark:text-slate-100">
                           {row.productName}
                         </TableCell>
-                        <TableCell className="p-1">
+                        <TableCell className="p-1 text-right">
                           <Input
                             type="number"
                             value={row.qty}
                             onChange={(e) => handleCellChange(idx, "qty", e.target.value)}
-                            className={`h-6 text-xs text-right bg-background font-bold ${focusHighlightClass}`}
+                            className={`h-7 w-16 text-xs text-right bg-white font-bold px-2 inline-block border border-slate-300 ${focusHighlightClass}`}
                           />
                         </TableCell>
-                        <TableCell className="p-1 font-medium">{row.unitName}</TableCell>
-                        <TableCell className="p-1 text-right">{row.unit}</TableCell>
-                        <TableCell className="p-1 text-right">{row.gross.toFixed(3)}</TableCell>
+                        <TableCell className="p-1 text-center font-bold text-slate-700">
+                          {row.unitName}
+                        </TableCell>
+                        <TableCell className="p-1 text-right font-medium">
+                          {row.gross.toFixed(3)}
+                        </TableCell>
                         <TableCell className="p-1 text-right font-bold">
                           <Input
                             type="number"
                             value={row.rateUnit}
                             onChange={(e) => handleCellChange(idx, "rateUnit", e.target.value)}
-                            className={`h-6 text-xs text-right bg-background font-bold ${focusHighlightClass}`}
+                            className={`h-7 w-20 text-xs text-right bg-white font-bold px-2 inline-block border border-slate-300 ${focusHighlightClass}`}
                           />
                         </TableCell>
                         <TableCell className="p-1 text-right font-bold text-slate-900 dark:text-white">
                           {row.amount.toFixed(2)}
                         </TableCell>
                         <TableCell className="p-1 text-right">{row.disPerc}</TableCell>
-                        <TableCell className="p-1 text-right">{row.sgstPerc}</TableCell>
-                        <TableCell className="p-1 text-right">{row.cgstPerc}</TableCell>
+                        <TableCell className="p-1 text-right font-bold text-slate-600">
+                          {row.sgstPerc.toFixed(2)}
+                        </TableCell>
+                        <TableCell className="p-1 text-right font-bold text-slate-600">
+                          {row.cgstPerc.toFixed(2)}
+                        </TableCell>
                       </TableRow>
                     ))
                   )}
@@ -654,7 +748,7 @@ export default function RetailSalePOSPage() {
               </Table>
             </div>
 
-            {/* Grid Summary Footer Line (Image 2) */}
+            {/* Grid Summary Footer Line (Image 3) */}
             <div className="bg-slate-100 dark:bg-slate-800 p-1.5 flex items-center justify-between font-mono font-bold text-xs border-t">
               <span className="w-8 text-center">{gridRows.length}</span>
               <div className="flex gap-12 text-right">
@@ -668,7 +762,7 @@ export default function RetailSalePOSPage() {
           </Card>
         </div>
 
-        {/* Right Side Voucher Details Panel (Image 2) */}
+        {/* Right Side Voucher Details Panel (Image 3) */}
         <div className="lg:col-span-1 space-y-1.5">
           <Card className="shadow-sm border bg-slate-50 dark:bg-slate-800">
             <div className="bg-slate-200 dark:bg-slate-700 px-2 py-1 font-bold text-[11px] text-slate-800 dark:text-slate-100 flex justify-between">
@@ -774,7 +868,7 @@ export default function RetailSalePOSPage() {
                 />
               </div>
 
-              {/* BIG BRIGHT GREEN NET TOTAL DISPLAY BOX (Image 2) */}
+              {/* BIG BRIGHT GREEN NET TOTAL DISPLAY BOX (Image 3) */}
               <div className="bg-lime-500 text-slate-950 p-2 rounded text-right border-2 border-lime-600 shadow-inner mt-2">
                 <span className="text-2xl font-black font-mono tracking-tight">
                   {totals.grandTotal.toFixed(2)}
@@ -785,7 +879,7 @@ export default function RetailSalePOSPage() {
         </div>
       </div>
 
-      {/* BOTTOM CUSTOMER DETAILS BAR (Image 2) */}
+      {/* BOTTOM CUSTOMER DETAILS BAR (Image 3 - Removed A/c Balance & Save F5) */}
       <div className="bg-slate-100 dark:bg-slate-800 p-1.5 rounded border flex flex-wrap items-center justify-between gap-2 text-xs font-sans">
         <div className="flex flex-wrap items-center gap-3">
           <div className="flex items-center gap-1">
@@ -815,20 +909,6 @@ export default function RetailSalePOSPage() {
               className="h-6 text-xs w-36 bg-white"
             />
           </div>
-
-          <div className="flex items-center gap-1 font-mono">
-            <span className="font-bold text-slate-600">A/c Balance</span>
-            <span className="bg-white border px-2 py-0.5 rounded font-bold">
-              {customerBalance.toFixed(2)} Cr
-            </span>
-          </div>
-
-          <Button
-            size="sm"
-            className="h-6 text-xs bg-slate-200 text-slate-800 border hover:bg-slate-300 font-bold px-2"
-          >
-            Save [F5]
-          </Button>
         </div>
 
         <div className="flex items-center gap-4 font-mono font-bold text-slate-600">
@@ -837,16 +917,9 @@ export default function RetailSalePOSPage() {
         </div>
       </div>
 
-      {/* BOTTOM ACTION BUTTONS TOOLBAR (Image 2) */}
+      {/* BOTTOM ACTION BUTTONS TOOLBAR (Image 3 - Removed Save F10, Other Details, Options) */}
       <div className="bg-white dark:bg-slate-800 p-1.5 rounded border flex flex-wrap items-center justify-between gap-2 shadow-sm">
         <div className="flex flex-wrap items-center gap-1.5">
-          <Button
-            size="sm"
-            className="h-7 text-xs bg-slate-200 text-slate-900 hover:bg-slate-300 font-bold border"
-            onClick={handleOpenPaymentModal}
-          >
-            Save [F10]
-          </Button>
           <Button
             size="sm"
             className="h-7 text-xs bg-slate-200 text-slate-900 hover:bg-slate-300 font-bold border"
@@ -856,22 +929,10 @@ export default function RetailSalePOSPage() {
           </Button>
           <Button
             size="sm"
-            className="h-7 text-xs bg-slate-200 text-slate-900 hover:bg-slate-300 font-bold border"
+            className="h-7 text-xs bg-amber-600 text-white hover:bg-amber-700 font-bold border shadow"
             onClick={handleOpenPaymentModal}
           >
-            Payment Details
-          </Button>
-          <Button
-            size="sm"
-            className="h-7 text-xs bg-slate-200 text-slate-900 hover:bg-slate-300 font-bold border"
-          >
-            Other Details
-          </Button>
-          <Button
-            size="sm"
-            className="h-7 text-xs bg-slate-200 text-slate-900 hover:bg-slate-300 font-bold border"
-          >
-            Options ▾
+            Payment Details [F8]
           </Button>
         </div>
 
@@ -879,19 +940,21 @@ export default function RetailSalePOSPage() {
           <Button
             size="sm"
             className="h-7 text-xs bg-slate-200 text-slate-900 hover:bg-slate-300 border"
+            onClick={handlePrevInvoice}
           >
             Previous [Pg Up]
           </Button>
           <Button
             size="sm"
             className="h-7 text-xs bg-slate-200 text-slate-900 hover:bg-slate-300 border"
+            onClick={handleNextInvoice}
           >
             Next [Pg Down]
           </Button>
         </div>
       </div>
 
-      {/* IMAGE 3: STOCK SELECTION POPUP MODAL (Stock : DESIGNER SAREE) */}
+      {/* IMAGE 2: STOCK SELECTION POPUP MODAL (Stock : DESIGNER SAREE - UP/DOWN Arrow Keyboard Navigation & Light Yellow Highlight) */}
       <Dialog open={isStockModalOpen} onOpenChange={setIsStockModalOpen}>
         <DialogContent className="max-w-4xl max-h-[85vh] p-0 border">
           <div className="bg-slate-300 dark:bg-slate-700 px-3 py-1.5 font-bold text-xs border-b text-slate-900 dark:text-slate-100 flex justify-between items-center">
@@ -918,36 +981,39 @@ export default function RetailSalePOSPage() {
               </TableHeader>
 
               <TableBody className="text-xs">
-                {stockItems.map((b, idx) => (
-                  <TableRow
-                    key={b.bar_no}
-                    className={`cursor-pointer transition-colors ${
-                      selectedStockRowIndex === idx
-                        ? "bg-sky-100 dark:bg-sky-950 font-bold"
-                        : "hover:bg-amber-50"
-                    }`}
-                    onClick={() => setSelectedStockRowIndex(idx)}
-                    onDoubleClick={() => {
-                      addStockItemToGrid(b);
-                      setIsStockModalOpen(false);
-                    }}
-                  >
-                    <TableCell className="text-center p-1">{idx + 1}</TableCell>
-                    <TableCell className="p-1 font-bold text-amber-800">{b.bar_no}</TableCell>
-                    <TableCell className="text-right p-1 font-bold">{b.qty || 1}</TableCell>
-                    <TableCell className="text-right p-1">{(b.pc_pur_rate || 500).toFixed(2)}</TableCell>
-                    <TableCell className="text-right p-1">{(b.cost_rate || 500).toFixed(2)}</TableCell>
-                    <TableCell className="text-right p-1">100.00</TableCell>
-                    <TableCell className="text-right p-1 font-bold text-emerald-700">
-                      {(b.pc_sale_rate || 1000).toFixed(2)}
-                    </TableCell>
-                    <TableCell className="p-1">1111</TableCell>
-                    <TableCell className="text-right p-1">1.00</TableCell>
-                    <TableCell className="p-1">24-01-2019</TableCell>
-                    <TableCell className="p-1">123</TableCell>
-                    <TableCell className="p-1">Peetex Sarees</TableCell>
-                  </TableRow>
-                ))}
+                {stockItems.map((b, idx) => {
+                  const isSelected = selectedStockRowIndex === idx;
+                  return (
+                    <TableRow
+                      key={b.bar_no}
+                      className={`cursor-pointer transition-colors ${
+                        isSelected
+                          ? "bg-yellow-200 text-slate-950 font-bold border-2 border-amber-500 shadow-inner"
+                          : "hover:bg-amber-50"
+                      }`}
+                      onClick={() => setSelectedStockRowIndex(idx)}
+                      onDoubleClick={() => {
+                        addStockItemToGrid(b);
+                        setIsStockModalOpen(false);
+                      }}
+                    >
+                      <TableCell className="text-center p-1">{idx + 1}</TableCell>
+                      <TableCell className="p-1 font-bold text-amber-900">{b.bar_no}</TableCell>
+                      <TableCell className="text-right p-1 font-bold">{b.qty || 1}</TableCell>
+                      <TableCell className="text-right p-1">{(b.pc_pur_rate || 1200).toFixed(2)}</TableCell>
+                      <TableCell className="text-right p-1">{(b.cost_rate || 1200).toFixed(2)}</TableCell>
+                      <TableCell className="text-right p-1">100.00</TableCell>
+                      <TableCell className="text-right p-1 font-bold text-emerald-700">
+                        {(b.pc_sale_rate || 1500).toFixed(2)}
+                      </TableCell>
+                      <TableCell className="p-1">1111</TableCell>
+                      <TableCell className="text-right p-1">1.00</TableCell>
+                      <TableCell className="p-1">24-01-2019</TableCell>
+                      <TableCell className="p-1">123</TableCell>
+                      <TableCell className="p-1">Peetex Sarees</TableCell>
+                    </TableRow>
+                  );
+                })}
               </TableBody>
             </Table>
           </div>
@@ -957,12 +1023,15 @@ export default function RetailSalePOSPage() {
               <span className="bg-white border px-3 py-1 rounded text-slate-900 font-bold">
                 {stockItems.length}
               </span>
+              <span className="text-[11px] text-slate-500">
+                (Use Up/Down Arrow keys to highlight row, Enter or Proceed [F5] to add)
+              </span>
             </div>
 
             <div className="flex gap-2">
               <Button
                 size="sm"
-                className="h-7 text-xs bg-slate-200 text-slate-900 border hover:bg-slate-300 font-bold px-4"
+                className="h-7 text-xs bg-amber-600 hover:bg-amber-700 text-white font-bold px-4 shadow"
                 onClick={() => {
                   if (stockItems[selectedStockRowIndex]) {
                     addStockItemToGrid(stockItems[selectedStockRowIndex]);
@@ -985,7 +1054,7 @@ export default function RetailSalePOSPage() {
         </DialogContent>
       </Dialog>
 
-      {/* IMAGE 4: PAYMENT DETAILS MODAL (Payment Details [F8]) */}
+      {/* IMAGE 1: PAYMENT DETAILS MODAL (Payment Details [F8] - Replaced HDFC CARD with CARD, removed KOTAK) */}
       <Dialog open={isPaymentModalOpen} onOpenChange={setIsPaymentModalOpen}>
         <DialogContent className="max-w-2xl p-0 border">
           <div className="bg-slate-200 dark:bg-slate-700 px-3 py-1.5 font-bold text-xs border-b text-slate-900 dark:text-slate-100 flex justify-between items-center">
@@ -993,7 +1062,7 @@ export default function RetailSalePOSPage() {
           </div>
 
           <div className="p-3 space-y-2">
-            {/* Top Amount & Red Balance Bar (Image 4) */}
+            {/* Top Amount & Red Balance Bar (Image 1) */}
             <div className="grid grid-cols-2 gap-2 text-xs font-mono font-bold">
               <div className="flex items-center gap-2">
                 <span className="text-slate-700">Amount</span>
@@ -1014,7 +1083,7 @@ export default function RetailSalePOSPage() {
               </div>
             </div>
 
-            {/* Payment Table Breakdown (Image 4) */}
+            {/* Payment Table Breakdown (Image 1) */}
             <Table className="w-full text-xs border font-mono">
               <TableHeader className="bg-slate-100 font-bold text-[11px]">
                 <TableRow>
@@ -1063,7 +1132,7 @@ export default function RetailSalePOSPage() {
           <div className="bg-slate-100 p-2 border-t flex justify-end gap-2 text-xs font-bold">
             <Button
               size="sm"
-              className="h-7 text-xs bg-slate-200 text-slate-900 border hover:bg-slate-300 font-bold px-4"
+              className="h-7 text-xs bg-amber-600 hover:bg-amber-700 text-white font-bold px-4 shadow"
               onClick={handleFinalSaveInvoice}
               disabled={loading || paymentBalanceRemaining > 0}
             >
