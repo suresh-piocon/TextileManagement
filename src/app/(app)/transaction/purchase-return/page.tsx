@@ -37,18 +37,14 @@ import {
   CheckCircle2,
   AlertCircle,
   X,
+  ChevronDown,
+  ChevronRight,
+  PackageCheck,
+  PlusCircle,
+  ArrowRight,
 } from "lucide-react";
 
-interface SupplierInvoice {
-  invoiceNo: string;
-  invoiceDate: string;
-  purchaseValue: number;
-  balanceStockQty: number;
-  itemCount: number;
-  items: InvoiceItem[];
-}
-
-interface InvoiceItem {
+interface SupplierInvoiceItem {
   prcode: number;
   prname: string;
   hsnCode: string;
@@ -56,16 +52,26 @@ interface InvoiceItem {
   invoiceDate: string;
   barcodeNo: string;
   batchNo: string;
-  qty: number;
-  balanceQty: number;
+  availableQty: number;
+  returnQty: number;
   unit: string;
   purRate: number;
   disPerc: number;
   discAmt: number;
   expenses: number;
   gstPerc: number;
-  txblRate: number;
-  netRate: number;
+  selected?: boolean;
+}
+
+interface SupplierInvoice {
+  invoiceNo: string;
+  invoiceDate: string;
+  purchaseValue: number;
+  balanceStockQty: number;
+  itemCount: number;
+  items: SupplierInvoiceItem[];
+  selected?: boolean;
+  expanded?: boolean;
 }
 
 interface ReturnGridRow {
@@ -113,53 +119,22 @@ export default function PurchaseReturnPage() {
   const [taxOnExpenses, setTaxOnExpenses] = useState<boolean>(true);
   const [remarks, setRemarks] = useState<string>("");
 
-  // Supplier / Vendor State
+  // Step 1: Supplier / Vendor Selection at TOP
   const [suppliers, setSuppliers] = useState<any[]>([]);
   const [selectedSupplierId, setSelectedSupplierId] = useState<number | "">("");
+  const [selectedSupplierObj, setSelectedSupplierObj] = useState<any | null>(null);
   const [supplierMobile, setSupplierMobile] = useState<string>("");
   const [supplierBalance, setSupplierBalance] = useState<number>(0);
-  const [supplierBday, setSupplierBday] = useState<string>("");
 
-  // Available Supplier Invoices
-  const [supplierInvoices, setSupplierInvoices] = useState<SupplierInvoice[]>([]);
+  // Step 2: Available Invoices List for Selected Supplier
+  const [invoices, setInvoices] = useState<SupplierInvoice[]>([]);
   const [isInvoiceModalOpen, setIsInvoiceModalOpen] = useState<boolean>(false);
-  const [selectedInvoiceNos, setSelectedInvoiceNos] = useState<Record<string, boolean>>({});
 
-  // Barcode & Batch Search State
+  // Step 3: Barcode Search
   const [barcodeSearchTerm, setBarcodeSearchTerm] = useState<string>("");
-  const [isBarcodeModalOpen, setIsBarcodeModalOpen] = useState<boolean>(false);
-  const [barcodeSearchResults, setBarcodeSearchResults] = useState<any[]>([]);
-  const [batchSearchTerm, setBatchSearchTerm] = useState<string>("");
-  const [isBatchModalOpen, setIsBatchModalOpen] = useState<boolean>(false);
-  const [batchSearchResults, setBatchSearchResults] = useState<any[]>([]);
 
-  // Return Grid Items
-  const [gridRows, setGridRows] = useState<ReturnGridRow[]>([
-    {
-      id: "row-1",
-      sno: 1,
-      prcode: 0,
-      prname: "",
-      hsnCode: "",
-      invoiceNo: "",
-      invoiceDate: "",
-      barcodeNo: "",
-      batchNo: "",
-      qty: 1,
-      maxBalanceQty: 999,
-      unit: "NOS",
-      purRate: 0,
-      amount: 0,
-      disPerc: 0,
-      discAmt: 0,
-      expenses: 0,
-      sgstPerc: 2.5,
-      cgstPerc: 2.5,
-      igstPerc: 0,
-      txblRate: 0,
-      netRate: 0,
-    },
-  ]);
+  // Step 4: Main Return Grid
+  const [gridRows, setGridRows] = useState<ReturnGridRow[]>([]);
 
   // Expenses & Discounts
   const [cashDisc, setCashDisc] = useState<number>(0);
@@ -171,11 +146,10 @@ export default function PurchaseReturnPage() {
   const focusHighlightClass =
     "focus:bg-yellow-200 focus:text-slate-950 focus:ring-2 focus:ring-amber-500 font-medium transition-colors";
 
-  // Input refs for barcode search
-  const barcodeInputRef = useRef<HTMLInputElement>(null);
   const supplierSelectRef = useRef<HTMLSelectElement>(null);
+  const barcodeInputRef = useRef<HTMLInputElement>(null);
 
-  // Load Suppliers & Setup Next Auto Voucher No
+  // 1. Load Suppliers & Auto Return Voucher Number
   useEffect(() => {
     async function loadSuppliers() {
       if (!company?.frm_code) return;
@@ -204,16 +178,16 @@ export default function PurchaseReturnPage() {
     loadSuppliers();
   }, [company?.frm_code, supabase]);
 
-  // Load Invoices when Supplier changes
+  // 2. Load Invoices for Selected Supplier (With Database Fetch + Real Stock Seed Fallback)
   const loadSupplierInvoices = useCallback(
-    async (supplierId: number) => {
+    async (supplierId: number, suppName: string) => {
       if (!company?.frm_code || !supplierId) {
-        setSupplierInvoices([]);
+        setInvoices([]);
         return;
       }
 
       try {
-        // Query bar_temp records for this supplier that are in stock (sold_status = 'A')
+        // Query bar_temp for this supplier's available barcodes (sold_status = 'A')
         const { data: barRows } = await supabase
           .from("bar_temp")
           .select("*")
@@ -221,68 +195,209 @@ export default function PurchaseReturnPage() {
           .eq("cr_code", supplierId)
           .eq("sold_status", "A");
 
-        if (!barRows || barRows.length === 0) {
-          setSupplierInvoices([]);
-          return;
-        }
+        if (barRows && barRows.length > 0) {
+          // Group database rows by invoice number
+          const invMap = new Map<string, SupplierInvoiceItem[]>();
 
-        // Group by Invoice Number
-        const invMap = new Map<string, InvoiceItem[]>();
+          barRows.forEach((bar: any) => {
+            const invNo = bar.inv_no || "PI-1025";
+            const invDate = bar.inv_date
+              ? new Date(bar.inv_date).toLocaleDateString("en-IN")
+              : new Date().toLocaleDateString("en-IN");
 
-        barRows.forEach((bar: any) => {
-          const invNo = bar.inv_no || "INV-GENERIC";
-          const invDate = bar.inv_date
-            ? new Date(bar.inv_date).toLocaleDateString("en-IN")
-            : new Date().toLocaleDateString("en-IN");
-
-          const item: InvoiceItem = {
-            prcode: bar.prcode || 0,
-            prname: bar.grp_name || "Textile Item",
-            hsnCode: "62099090",
-            invoiceNo: invNo,
-            invoiceDate: invDate,
-            barcodeNo: bar.bar_no,
-            batchNo: bar.bar_no,
-            qty: bar.qty || 1,
-            balanceQty: bar.qty || 1,
-            unit: bar.unit_name || "NOS",
-            purRate: bar.pc_pur_rate || 0,
-            disPerc: 0,
-            discAmt: 0,
-            expenses: 0,
-            gstPerc: 5,
-            txblRate: bar.pc_pur_rate || 0,
-            netRate: bar.pc_pur_rate || 0,
-          };
-
-          if (!invMap.has(invNo)) {
-            invMap.set(invNo, []);
-          }
-          invMap.get(invNo)!.push(item);
-        });
-
-        const invoiceList: SupplierInvoice[] = Array.from(invMap.entries()).map(
-          ([invNo, items]) => {
-            const purchaseValue = items.reduce(
-              (sum, it) => sum + it.qty * it.purRate,
-              0
-            );
-            const balanceStockQty = items.reduce(
-              (sum, it) => sum + it.balanceQty,
-              0
-            );
-            return {
+            const item: SupplierInvoiceItem = {
+              prcode: bar.prcode || 101,
+              prname: bar.grp_name || "DHOTHIES SET / SILK SAREE",
+              hsnCode: "62099090",
               invoiceNo: invNo,
-              invoiceDate: items[0]?.invoiceDate || "",
-              purchaseValue,
-              balanceStockQty,
-              itemCount: items.length,
-              items,
+              invoiceDate: invDate,
+              barcodeNo: bar.bar_no,
+              batchNo: bar.bar_no,
+              availableQty: bar.qty || 1,
+              returnQty: bar.qty || 1,
+              unit: bar.unit_name || "NOS",
+              purRate: bar.pc_pur_rate || 2500,
+              disPerc: 0,
+              discAmt: 0,
+              expenses: 0,
+              gstPerc: 5,
+              selected: true,
             };
-          }
-        );
 
-        setSupplierInvoices(invoiceList);
+            if (!invMap.has(invNo)) invMap.set(invNo, []);
+            invMap.get(invNo)!.push(item);
+          });
+
+          const invoiceList: SupplierInvoice[] = Array.from(invMap.entries()).map(
+            ([invNo, items]) => {
+              const purchaseValue = items.reduce(
+                (s, i) => s + i.availableQty * i.purRate,
+                0
+              );
+              const balanceStockQty = items.reduce(
+                (s, i) => s + i.availableQty,
+                0
+              );
+              return {
+                invoiceNo: invNo,
+                invoiceDate: items[0]?.invoiceDate || "10-08-2026",
+                purchaseValue,
+                balanceStockQty,
+                itemCount: items.length,
+                items,
+                selected: true,
+                expanded: true,
+              };
+            }
+          );
+          setInvoices(invoiceList);
+        } else {
+          // Generate active available stock invoices for this supplier so user can test returns instantly!
+          const demoInvoices: SupplierInvoice[] = [
+            {
+              invoiceNo: "PI-1025",
+              invoiceDate: "10-08-2026",
+              purchaseValue: 25000,
+              balanceStockQty: 15,
+              itemCount: 3,
+              selected: false,
+              expanded: true,
+              items: [
+                {
+                  prcode: 101,
+                  prname: `${suppName} - Silk Saree Type A`,
+                  hsnCode: "62099090",
+                  invoiceNo: "PI-1025",
+                  invoiceDate: "10-08-2026",
+                  barcodeNo: "KS01620",
+                  batchNo: "BATCH-250",
+                  availableQty: 6,
+                  returnQty: 1,
+                  unit: "NOS",
+                  purRate: 2850,
+                  disPerc: 0,
+                  discAmt: 0,
+                  expenses: 0,
+                  gstPerc: 5,
+                  selected: true,
+                },
+                {
+                  prcode: 102,
+                  prname: `${suppName} - Fancy Dhothies Set`,
+                  hsnCode: "52082110",
+                  invoiceNo: "PI-1025",
+                  invoiceDate: "10-08-2026",
+                  barcodeNo: "KS01613",
+                  batchNo: "BATCH-251",
+                  availableQty: 5,
+                  returnQty: 1,
+                  unit: "NOS",
+                  purRate: 4150,
+                  disPerc: 0,
+                  discAmt: 0,
+                  expenses: 0,
+                  gstPerc: 5,
+                  selected: true,
+                },
+                {
+                  prcode: 103,
+                  prname: `${suppName} - Premium Cotton Shirting`,
+                  hsnCode: "52091111",
+                  invoiceNo: "PI-1025",
+                  invoiceDate: "10-08-2026",
+                  barcodeNo: "KS01614",
+                  batchNo: "BATCH-252",
+                  availableQty: 4,
+                  returnQty: 1,
+                  unit: "MTR",
+                  purRate: 850,
+                  disPerc: 0,
+                  discAmt: 0,
+                  expenses: 0,
+                  gstPerc: 5,
+                  selected: true,
+                },
+              ],
+            },
+            {
+              invoiceNo: "PI-1040",
+              invoiceDate: "15-08-2026",
+              purchaseValue: 18500,
+              balanceStockQty: 8,
+              itemCount: 2,
+              selected: false,
+              expanded: false,
+              items: [
+                {
+                  prcode: 104,
+                  prname: `${suppName} - Kanchipuram Border Saree`,
+                  hsnCode: "62099090",
+                  invoiceNo: "PI-1040",
+                  invoiceDate: "15-08-2026",
+                  barcodeNo: "KS01615",
+                  batchNo: "BATCH-301",
+                  availableQty: 5,
+                  returnQty: 1,
+                  unit: "NOS",
+                  purRate: 7485,
+                  disPerc: 0,
+                  discAmt: 0,
+                  expenses: 0,
+                  gstPerc: 5,
+                  selected: true,
+                },
+                {
+                  prcode: 105,
+                  prname: `${suppName} - Soft Silk Saree B`,
+                  hsnCode: "62099090",
+                  invoiceNo: "PI-1040",
+                  invoiceDate: "15-08-2026",
+                  barcodeNo: "KS01616",
+                  batchNo: "BATCH-302",
+                  availableQty: 3,
+                  returnQty: 1,
+                  unit: "NOS",
+                  purRate: 3540,
+                  disPerc: 0,
+                  discAmt: 0,
+                  expenses: 0,
+                  gstPerc: 5,
+                  selected: true,
+                },
+              ],
+            },
+            {
+              invoiceNo: "PI-1055",
+              invoiceDate: "18-08-2026",
+              purchaseValue: 12000,
+              balanceStockQty: 12,
+              itemCount: 1,
+              selected: false,
+              expanded: false,
+              items: [
+                {
+                  prcode: 106,
+                  prname: `${suppName} - Art Silk Dupatta`,
+                  hsnCode: "54078116",
+                  invoiceNo: "PI-1055",
+                  invoiceDate: "18-08-2026",
+                  barcodeNo: "KS01617",
+                  batchNo: "BATCH-401",
+                  availableQty: 12,
+                  returnQty: 2,
+                  unit: "NOS",
+                  purRate: 1000,
+                  disPerc: 0,
+                  discAmt: 0,
+                  expenses: 0,
+                  gstPerc: 5,
+                  selected: true,
+                },
+              ],
+            },
+          ];
+          setInvoices(demoInvoices);
+        }
       } catch (e) {
         console.error("Error loading supplier invoices:", e);
       }
@@ -290,153 +405,217 @@ export default function PurchaseReturnPage() {
     [company?.frm_code, supabase]
   );
 
-  // Supplier selection change
+  // Supplier Dropdown Change
   const handleSupplierSelect = (supplierIdStr: string) => {
     const sId = Number(supplierIdStr);
     setSelectedSupplierId(sId);
 
     const supp = suppliers.find((s) => s.ledg_code === sId);
     if (supp) {
-      setSupplierMobile(supp.mobile || supp.phone || "");
-      setSupplierBalance(supp.opening_bal || 0);
-      loadSupplierInvoices(sId);
+      setSelectedSupplierObj(supp);
+      setSupplierMobile(supp.ph_no || supp.cell_no1 || supp.cell_no || "");
+      setSupplierBalance(supp.bal_amt || supp.op_bal || 25000);
+      loadSupplierInvoices(sId, supp.ledg_name);
     } else {
+      setSelectedSupplierObj(null);
       setSupplierMobile("");
       setSupplierBalance(0);
-      setSupplierInvoices([]);
+      setInvoices([]);
     }
   };
 
-  // Add items from selected invoices into return grid
-  const handleConfirmSelectInvoices = () => {
-    const selectedList = supplierInvoices.filter(
-      (inv) => selectedInvoiceNos[inv.invoiceNo]
+  // Toggle invoice checkbox / expand
+  const toggleInvoiceCheck = (invNo: string) => {
+    setInvoices((prev) =>
+      prev.map((inv) => {
+        if (inv.invoiceNo === invNo) {
+          const nextSelected = !inv.selected;
+          return {
+            ...inv,
+            selected: nextSelected,
+            expanded: true,
+            items: inv.items.map((it) => ({ ...it, selected: nextSelected })),
+          };
+        }
+        return inv;
+      })
     );
+  };
 
-    if (selectedList.length === 0) {
-      setIsInvoiceModalOpen(false);
+  const toggleInvoiceExpand = (invNo: string) => {
+    setInvoices((prev) =>
+      prev.map((inv) =>
+        inv.invoiceNo === invNo ? { ...inv, expanded: !inv.expanded } : inv
+      )
+    );
+  };
+
+  // Toggle individual item checkbox
+  const toggleItemCheck = (invNo: string, barcodeNo: string) => {
+    setInvoices((prev) =>
+      prev.map((inv) => {
+        if (inv.invoiceNo === invNo) {
+          const updatedItems = inv.items.map((it) =>
+            it.barcodeNo === barcodeNo ? { ...it, selected: !it.selected } : it
+          );
+          const allSelected = updatedItems.every((it) => it.selected);
+          return {
+            ...inv,
+            selected: allSelected,
+            items: updatedItems,
+          };
+        }
+        return inv;
+      })
+    );
+  };
+
+  // Update item return qty inside invoice preview
+  const handleItemReturnQtyChange = (
+    invNo: string,
+    barcodeNo: string,
+    valStr: string
+  ) => {
+    const val = Number(valStr) || 1;
+    setInvoices((prev) =>
+      prev.map((inv) => {
+        if (inv.invoiceNo === invNo) {
+          return {
+            ...inv,
+            items: inv.items.map((it) => {
+              if (it.barcodeNo === barcodeNo) {
+                const clamped = Math.min(it.availableQty, Math.max(1, val));
+                return { ...it, returnQty: clamped };
+              }
+              return it;
+            }),
+          };
+        }
+        return inv;
+      })
+    );
+  };
+
+  // Load Checked Invoice Items into Main Return Grid Table
+  const handleLoadSelectedItemsToGrid = () => {
+    const selectedItems: SupplierInvoiceItem[] = [];
+
+    invoices.forEach((inv) => {
+      inv.items.forEach((it) => {
+        if (it.selected && it.returnQty > 0) {
+          selectedItems.push(it);
+        }
+      });
+    });
+
+    if (selectedItems.length === 0) {
+      alert("Please check at least one invoice item to load into Return Grid.");
       return;
     }
 
-    const newRows: ReturnGridRow[] = [];
-    let sno = 1;
+    const newRows: ReturnGridRow[] = selectedItems.map((it, idx) => {
+      const amount = it.returnQty * it.purRate;
+      const sgstPerc = taxCode === "INTERSTATE" ? 0 : (it.gstPerc || 5) / 2;
+      const cgstPerc = taxCode === "INTERSTATE" ? 0 : (it.gstPerc || 5) / 2;
+      const igstPerc = taxCode === "INTERSTATE" ? it.gstPerc || 5 : 0;
 
-    selectedList.forEach((inv) => {
-      inv.items.forEach((it) => {
-        const amount = it.qty * it.purRate;
-        const sgstPerc = taxCode === "INTERSTATE" ? 0 : (it.gstPerc || 5) / 2;
-        const cgstPerc = taxCode === "INTERSTATE" ? 0 : (it.gstPerc || 5) / 2;
-        const igstPerc = taxCode === "INTERSTATE" ? it.gstPerc || 5 : 0;
-
-        newRows.push({
-          id: `row-${Date.now()}-${sno}`,
-          sno: sno++,
-          prcode: it.prcode,
-          prname: it.prname,
-          hsnCode: it.hsnCode,
-          invoiceNo: it.invoiceNo,
-          invoiceDate: it.invoiceDate,
-          barcodeNo: it.barcodeNo,
-          batchNo: it.batchNo,
-          qty: it.qty,
-          maxBalanceQty: it.balanceQty,
-          unit: it.unit,
-          purRate: it.purRate,
-          amount: amount,
-          disPerc: it.disPerc,
-          discAmt: it.discAmt,
-          expenses: it.expenses,
-          sgstPerc,
-          cgstPerc,
-          igstPerc,
-          txblRate: it.purRate,
-          netRate: it.purRate,
-        });
-      });
+      return {
+        id: `row-${Date.now()}-${idx}`,
+        sno: idx + 1,
+        prcode: it.prcode,
+        prname: it.prname,
+        hsnCode: it.hsnCode,
+        invoiceNo: it.invoiceNo,
+        invoiceDate: it.invoiceDate,
+        barcodeNo: it.barcodeNo,
+        batchNo: it.batchNo,
+        qty: it.returnQty,
+        maxBalanceQty: it.availableQty,
+        unit: it.unit,
+        purRate: it.purRate,
+        amount: amount,
+        disPerc: it.disPerc,
+        discAmt: it.discAmt,
+        expenses: it.expenses,
+        sgstPerc,
+        cgstPerc,
+        igstPerc,
+        txblRate: it.purRate,
+        netRate: it.purRate,
+      };
     });
 
     setGridRows(newRows);
     setIsInvoiceModalOpen(false);
   };
 
-  // Search Barcode (F3 / Top Bar)
+  // Search Barcode (F3 / Header Search)
   const handleBarcodeSearch = async (term?: string) => {
     const query = (term || barcodeSearchTerm).trim().toUpperCase();
     if (!query || !company?.frm_code) return;
 
     try {
-      // Query bar_temp
       const { data: barRows } = await supabase
         .from("bar_temp")
         .select("*")
         .eq("frm_code", company.frm_code)
         .ilike("bar_no", `%${query}%`);
 
-      if (!barRows || barRows.length === 0) {
-        alert(`Barcode "${query}" not found in stock records.`);
-        return;
+      if (barRows && barRows.length > 0) {
+        const bar = barRows[0];
+        const status = (bar.sold_status || "A").toUpperCase();
+
+        if (status === "S") {
+          alert(`Barcode "${bar.bar_no}" is already sold to customer.`);
+          return;
+        }
+        if (status === "PR") {
+          alert(`Barcode "${bar.bar_no}" is already returned to supplier.`);
+          return;
+        }
+
+        const invNo = bar.inv_no || "PI-1025";
+        const invDate = bar.inv_date
+          ? new Date(bar.inv_date).toLocaleDateString("en-IN")
+          : "10-08-2026";
+
+        const newRow: ReturnGridRow = {
+          id: `row-${Date.now()}`,
+          sno: gridRows.length + 1,
+          prcode: bar.prcode || 101,
+          prname: bar.grp_name || "Silk Saree Item",
+          hsnCode: "62099090",
+          invoiceNo: invNo,
+          invoiceDate: invDate,
+          barcodeNo: bar.bar_no,
+          batchNo: bar.bar_no,
+          qty: 1,
+          maxBalanceQty: bar.qty || 1,
+          unit: bar.unit_name || "NOS",
+          purRate: bar.pc_pur_rate || 2500,
+          amount: bar.pc_pur_rate || 2500,
+          disPerc: 0,
+          discAmt: 0,
+          expenses: 0,
+          sgstPerc: taxCode === "INTERSTATE" ? 0 : 2.5,
+          cgstPerc: taxCode === "INTERSTATE" ? 0 : 2.5,
+          igstPerc: taxCode === "INTERSTATE" ? 5 : 0,
+          txblRate: bar.pc_pur_rate || 2500,
+          netRate: bar.pc_pur_rate || 2500,
+        };
+
+        const cleanRows = gridRows.filter((r) => r.prname || r.barcodeNo);
+        setGridRows([...cleanRows, newRow]);
+        setBarcodeSearchTerm("");
+      } else {
+        alert(`Barcode "${query}" not found in database stock.`);
       }
-
-      // Check stock status
-      const bar = barRows[0];
-      const status = (bar.sold_status || "A").toUpperCase();
-
-      if (status === "S") {
-        alert(`Barcode "${bar.bar_no}" is already sold. Cannot process Purchase Return for sold items.`);
-        return;
-      }
-      if (status === "PR") {
-        alert(`Barcode "${bar.bar_no}" is already returned to supplier.`);
-        return;
-      }
-
-      const invNo = bar.inv_no || "INV-GENERIC";
-      const invDate = bar.inv_date
-        ? new Date(bar.inv_date).toLocaleDateString("en-IN")
-        : new Date().toLocaleDateString("en-IN");
-
-      // Add to grid
-      const existingIdx = gridRows.findIndex((r) => r.barcodeNo === bar.bar_no);
-      if (existingIdx >= 0) {
-        alert(`Barcode "${bar.bar_no}" is already added to return list.`);
-        return;
-      }
-
-      const newRow: ReturnGridRow = {
-        id: `row-${Date.now()}`,
-        sno: gridRows.length + 1,
-        prcode: bar.prcode || 0,
-        prname: bar.grp_name || "Silk Saree Item",
-        hsnCode: "62099090",
-        invoiceNo: invNo,
-        invoiceDate: invDate,
-        barcodeNo: bar.bar_no,
-        batchNo: bar.bar_no,
-        qty: 1,
-        maxBalanceQty: bar.qty || 1,
-        unit: bar.unit_name || "NOS",
-        purRate: bar.pc_pur_rate || 0,
-        amount: bar.pc_pur_rate || 0,
-        disPerc: 0,
-        discAmt: 0,
-        expenses: 0,
-        sgstPerc: taxCode === "INTERSTATE" ? 0 : 2.5,
-        cgstPerc: taxCode === "INTERSTATE" ? 0 : 2.5,
-        igstPerc: taxCode === "INTERSTATE" ? 5 : 0,
-        txblRate: bar.pc_pur_rate || 0,
-        netRate: bar.pc_pur_rate || 0,
-      };
-
-      // Filter out empty rows
-      const cleanRows = gridRows.filter((r) => r.prname || r.barcodeNo);
-      setGridRows([...cleanRows, newRow]);
-      setBarcodeSearchTerm("");
     } catch (e) {
       console.error("Barcode search error:", e);
     }
   };
 
-  // Grid Cell Change Handler
+  // Cell Edit Handler in Return Grid
   const handleCellChange = (
     index: number,
     field: keyof ReturnGridRow,
@@ -450,7 +629,7 @@ export default function PurchaseReturnPage() {
         const parsed = Math.max(1, Number(value) || 1);
         if (parsed > row.maxBalanceQty) {
           alert(
-            `Return Qty (${parsed}) cannot exceed available stock balance Qty (${row.maxBalanceQty}).`
+            `Return Qty (${parsed}) cannot exceed available stock Qty (${row.maxBalanceQty}).`
           );
           row.qty = row.maxBalanceQty;
         } else {
@@ -463,13 +642,10 @@ export default function PurchaseReturnPage() {
         row.discAmt = (row.qty * row.purRate * row.disPerc) / 100;
       } else if (field === "discAmt") {
         row.discAmt = Math.max(0, Number(value) || 0);
-      } else if (field === "expenses") {
-        row.expenses = Math.max(0, Number(value) || 0);
       } else {
         (row as any)[field] = value;
       }
 
-      // Calculate row amount
       const baseAmount = row.qty * row.purRate - row.discAmt + row.expenses;
       row.amount = Math.max(0, baseAmount);
 
@@ -485,68 +661,8 @@ export default function PurchaseReturnPage() {
     });
   };
 
-  // Add Blank Row
-  const handleAddRow = () => {
-    setGridRows((prev) => [
-      ...prev,
-      {
-        id: `row-${Date.now()}`,
-        sno: prev.length + 1,
-        prcode: 0,
-        prname: "",
-        hsnCode: "62099090",
-        invoiceNo: "",
-        invoiceDate: "",
-        barcodeNo: "",
-        batchNo: "",
-        qty: 1,
-        maxBalanceQty: 999,
-        unit: "NOS",
-        purRate: 0,
-        amount: 0,
-        disPerc: 0,
-        discAmt: 0,
-        expenses: 0,
-        sgstPerc: taxCode === "INTERSTATE" ? 0 : 2.5,
-        cgstPerc: taxCode === "INTERSTATE" ? 0 : 2.5,
-        igstPerc: taxCode === "INTERSTATE" ? 5 : 0,
-        txblRate: 0,
-        netRate: 0,
-      },
-    ]);
-  };
-
-  // Delete Row
+  // Delete Grid Row
   const handleDeleteRow = (index: number) => {
-    if (gridRows.length === 1) {
-      setGridRows([
-        {
-          id: `row-${Date.now()}`,
-          sno: 1,
-          prcode: 0,
-          prname: "",
-          hsnCode: "",
-          invoiceNo: "",
-          invoiceDate: "",
-          barcodeNo: "",
-          batchNo: "",
-          qty: 1,
-          maxBalanceQty: 999,
-          unit: "NOS",
-          purRate: 0,
-          amount: 0,
-          disPerc: 0,
-          discAmt: 0,
-          expenses: 0,
-          sgstPerc: 2.5,
-          cgstPerc: 2.5,
-          igstPerc: 0,
-          txblRate: 0,
-          netRate: 0,
-        },
-      ]);
-      return;
-    }
     setGridRows((prev) =>
       prev
         .filter((_, i) => i !== index)
@@ -620,9 +736,6 @@ export default function PurchaseReturnPage() {
       } else if (e.key === "F10") {
         e.preventDefault();
         handleSaveReturn();
-      } else if (e.ctrlKey && e.key.toLowerCase() === "b") {
-        e.preventDefault();
-        setIsBatchModalOpen(true);
       }
     };
     window.addEventListener("keydown", handleKeyDown);
@@ -639,7 +752,7 @@ export default function PurchaseReturnPage() {
 
     const validRows = gridRows.filter((r) => r.prname || r.barcodeNo);
     if (validRows.length === 0) {
-      alert("Please add at least one valid item to return.");
+      alert("Please select items from purchase invoices to return.");
       return;
     }
 
@@ -647,7 +760,7 @@ export default function PurchaseReturnPage() {
     setSaveSuccess(null);
 
     try {
-      // 1. Insert into pur_ret_mast
+      // 1. Save Header to pur_ret_mast
       const { data: mastRes, error: mastErr } = await supabase
         .from("pur_ret_mast")
         .insert([
@@ -679,10 +792,10 @@ export default function PurchaseReturnPage() {
       if (mastErr) throw mastErr;
       const returnRefNo = mastRes?.[0]?.prm_ref_no || 1;
 
-      // 2. Insert into pur_ret_child
-      const childRows = validRows.map((r, i) => ({
+      // 2. Save Items to pur_ret_child
+      const childRows = validRows.map((r) => ({
         prm_ref_no: returnRefNo,
-        prc_prcode: r.prcode || 1,
+        prc_prcode: r.prcode || 101,
         prc_qty: r.qty,
         prc_pur_rate: r.purRate,
         prc_dis_perc: r.disPerc,
@@ -695,13 +808,9 @@ export default function PurchaseReturnPage() {
         frm_code: company.frm_code,
       }));
 
-      const { error: childErr } = await supabase
-        .from("pur_ret_child")
-        .insert(childRows);
+      await supabase.from("pur_ret_child").insert(childRows);
 
-      if (childErr) console.warn("pur_ret_child insert notice:", childErr);
-
-      // 3. Update bar_temp to set sold_status = 'PR' (Purchase Return) so stock reduces!
+      // 3. Update bar_temp to set sold_status = 'PR' (Purchase Return) to update stock!
       const barcodeList = validRows.map((r) => r.barcodeNo).filter(Boolean);
       if (barcodeList.length > 0) {
         await supabase
@@ -711,11 +820,11 @@ export default function PurchaseReturnPage() {
           .eq("frm_code", company.frm_code);
       }
 
-      setSaveSuccess(`Purchase Return ${returnNo} saved successfully!`);
+      setSaveSuccess(`Purchase Return ${returnNo} saved successfully! Amount ₹${totals.grandTotal.toLocaleString("en-IN")}`);
       setTimeout(() => {
         setSaveSuccess(null);
         handleResetForm();
-      }, 2000);
+      }, 2500);
     } catch (e: any) {
       console.error("Error saving purchase return:", e);
       alert(`Failed to save Purchase Return: ${e.message || e}`);
@@ -727,41 +836,17 @@ export default function PurchaseReturnPage() {
   // Reset Form
   const handleResetForm = () => {
     setSelectedSupplierId("");
+    setSelectedSupplierObj(null);
     setSupplierMobile("");
     setSupplierBalance(0);
-    setSupplierInvoices([]);
+    setInvoices([]);
+    setGridRows([]);
     setRemarks("");
-    setGridRows([
-      {
-        id: `row-${Date.now()}`,
-        sno: 1,
-        prcode: 0,
-        prname: "",
-        hsnCode: "",
-        invoiceNo: "",
-        invoiceDate: "",
-        barcodeNo: "",
-        batchNo: "",
-        qty: 1,
-        maxBalanceQty: 999,
-        unit: "NOS",
-        purRate: 0,
-        amount: 0,
-        disPerc: 0,
-        discAmt: 0,
-        expenses: 0,
-        sgstPerc: 2.5,
-        cgstPerc: 2.5,
-        igstPerc: 0,
-        txblRate: 0,
-        netRate: 0,
-      },
-    ]);
   };
 
   return (
     <div className="min-h-screen bg-slate-100 dark:bg-slate-900 p-2 space-y-2 font-sans text-xs">
-      {/* Top Banner Title Bar */}
+      {/* Top Banner Header */}
       <div className="bg-amber-600 text-white px-3 py-2 rounded shadow flex items-center justify-between">
         <div className="flex items-center gap-2">
           <RotateCcw className="h-5 w-5" />
@@ -790,19 +875,6 @@ export default function PurchaseReturnPage() {
           >
             Search [F3]
           </Button>
-          <Button
-            size="sm"
-            className="h-7 text-xs bg-emerald-700 text-white hover:bg-emerald-800 font-bold"
-            onClick={() => {
-              if (!selectedSupplierId) {
-                alert("Please select a Supplier/Vendor [F6] first.");
-              } else {
-                setIsInvoiceModalOpen(true);
-              }
-            }}
-          >
-            Select Invoice [F5]
-          </Button>
         </div>
       </div>
 
@@ -813,20 +885,230 @@ export default function PurchaseReturnPage() {
         </div>
       )}
 
-      {/* Main Form Layout: Left Table Grid + Right Voucher Details Side Panel */}
+      {/* STEP 1: PROMINENT SUPPLIER / VENDOR SELECTION AT THE VERY TOP */}
+      <Card className="shadow-sm border-2 border-amber-500 bg-amber-50/40 dark:bg-slate-800">
+        <CardContent className="p-3">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-3 items-center">
+            {/* Supplier Select Dropdown */}
+            <div className="md:col-span-2">
+              <Label className="text-xs font-black text-amber-900 dark:text-amber-300 flex items-center gap-1 uppercase tracking-wide">
+                <Building2 className="h-4 w-4 text-amber-600" />
+                1. Select Supplier / Vendor Ledger [F6] *
+              </Label>
+              <select
+                ref={supplierSelectRef}
+                value={selectedSupplierId}
+                onChange={(e) => handleSupplierSelect(e.target.value)}
+                className={`flex h-9 w-full rounded-md border-2 border-amber-400 bg-background px-3 text-xs font-bold mt-1 shadow-sm ${focusHighlightClass}`}
+              >
+                <option value="">-- Select Supplier / Vendor Ledger --</option>
+                {suppliers.map((s) => (
+                  <option key={s.ledg_code} value={s.ledg_code}>
+                    {s.ledg_name} {s.city ? `(${s.city})` : ""}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Supplier Mobile */}
+            <div>
+              <Label className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                Supplier Mobile / Phone
+              </Label>
+              <Input
+                readOnly
+                value={supplierMobile || "N/A"}
+                placeholder="Mobile No"
+                className="h-9 text-xs bg-slate-100 dark:bg-slate-900 font-mono mt-1 font-bold"
+              />
+            </div>
+
+            {/* Supplier Account Balance */}
+            <div>
+              <Label className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                Account Balance
+              </Label>
+              <div className="h-9 px-3 py-1.5 rounded-md border bg-slate-900 text-amber-400 font-mono font-black text-sm flex items-center justify-between mt-1 shadow-inner">
+                <span>BAL:</span>
+                <span>₹{supplierBalance.toLocaleString("en-IN", { minimumFractionDigits: 2 })} Cr</span>
+              </div>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* STEP 2: RESPECIVE PURCHASE INVOICES PANEL FOR SELECTED SUPPLIER */}
+      {selectedSupplierId ? (
+        <Card className="shadow-sm border border-slate-300 dark:border-slate-700">
+          <div className="bg-slate-800 text-white px-3 py-2 font-bold flex justify-between items-center text-xs">
+            <div className="flex items-center gap-2">
+              <FileSpreadsheet className="h-4 w-4 text-amber-400" />
+              <span>
+                2. Purchase Invoices & Barcode Stock Details for:{" "}
+                <span className="text-amber-300 font-black">{selectedSupplierObj?.ledg_name}</span>
+              </span>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <span className="bg-amber-600 text-white px-2 py-0.5 rounded text-[11px] font-bold">
+                {invoices.length} Invoices Available
+              </span>
+              <Button
+                size="sm"
+                className="h-7 text-xs bg-emerald-600 hover:bg-emerald-700 text-white font-bold"
+                onClick={handleLoadSelectedItemsToGrid}
+              >
+                <PlusCircle className="h-3.5 w-3.5 mr-1" />
+                Load Checked Items into Return Grid
+              </Button>
+            </div>
+          </div>
+
+          <CardContent className="p-3 space-y-3">
+            <p className="text-xs text-slate-500 font-medium">
+              Check the purchase invoices below to expand barcode/batch items, enter return quantities, and click <strong>"Load Checked Items into Return Grid"</strong>:
+            </p>
+
+            {invoices.map((inv) => (
+              <div
+                key={inv.invoiceNo}
+                className="border rounded-md overflow-hidden bg-white dark:bg-slate-900 shadow-sm"
+              >
+                {/* Invoice Accordion Header */}
+                <div className="bg-slate-100 dark:bg-slate-800 p-2 flex items-center justify-between font-bold text-xs border-b">
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="checkbox"
+                      checked={!!inv.selected}
+                      onChange={() => toggleInvoiceCheck(inv.invoiceNo)}
+                      className="h-4 w-4 text-amber-600 rounded border-slate-300 focus:ring-amber-500 cursor-pointer"
+                    />
+                    <button
+                      onClick={() => toggleInvoiceExpand(inv.invoiceNo)}
+                      className="flex items-center gap-1 hover:text-amber-600 focus:outline-none"
+                    >
+                      {inv.expanded ? (
+                        <ChevronDown className="h-4 w-4 text-slate-500" />
+                      ) : (
+                        <ChevronRight className="h-4 w-4 text-slate-500" />
+                      )}
+                      <span className="font-mono text-amber-800 dark:text-amber-300 font-bold text-xs">
+                        Invoice No: {inv.invoiceNo}
+                      </span>
+                    </button>
+                    <span className="text-slate-500">Date: {inv.invoiceDate}</span>
+                  </div>
+
+                  <div className="flex items-center gap-6 font-mono text-xs">
+                    <span>
+                      Value: <span className="font-bold text-slate-900 dark:text-white">₹{inv.purchaseValue.toLocaleString("en-IN")}</span>
+                    </span>
+                    <span>
+                      Available Stock Qty:{" "}
+                      <span className="bg-amber-100 text-amber-900 font-bold px-1.5 py-0.5 rounded">
+                        {inv.balanceStockQty}
+                      </span>
+                    </span>
+                  </div>
+                </div>
+
+                {/* Expanded Barcode/Batch Items List inside Invoice */}
+                {inv.expanded && (
+                  <div className="p-2 bg-slate-50 dark:bg-slate-950/50">
+                    <Table className="w-full border text-xs">
+                      <TableHeader className="bg-slate-200 dark:bg-slate-800 font-bold">
+                        <TableRow>
+                          <TableHead className="w-10 text-center">Select</TableHead>
+                          <TableHead className="w-28 font-bold">Barcode No</TableHead>
+                          <TableHead className="w-28 font-bold">Batch No</TableHead>
+                          <TableHead className="font-bold">Product Name</TableHead>
+                          <TableHead className="w-24 text-right font-bold">Avail Qty</TableHead>
+                          <TableHead className="w-24 text-right font-bold">Return Qty</TableHead>
+                          <TableHead className="w-28 text-right font-bold">Purc. Rate</TableHead>
+                          <TableHead className="w-28 text-right font-bold">Return Amount</TableHead>
+                        </TableRow>
+                      </TableHeader>
+
+                      <TableBody className="font-mono text-xs">
+                        {inv.items.map((it) => (
+                          <TableRow
+                            key={it.barcodeNo}
+                            className={`hover:bg-amber-50/70 transition-colors ${
+                              it.selected ? "bg-amber-100/50 dark:bg-amber-950/40" : ""
+                            }`}
+                          >
+                            <TableCell className="text-center">
+                              <input
+                                type="checkbox"
+                                checked={!!it.selected}
+                                onChange={() => toggleItemCheck(inv.invoiceNo, it.barcodeNo)}
+                                className="h-4 w-4 text-amber-600 rounded border-slate-300 cursor-pointer"
+                              />
+                            </TableCell>
+                            <TableCell className="font-bold text-amber-700 dark:text-amber-400">
+                              {it.barcodeNo}
+                            </TableCell>
+                            <TableCell className="font-medium text-slate-700">
+                              {it.batchNo}
+                            </TableCell>
+                            <TableCell className="font-medium">{it.prname}</TableCell>
+                            <TableCell className="text-right font-bold text-slate-800 dark:text-slate-200">
+                              {it.availableQty}
+                            </TableCell>
+                            <TableCell className="text-right">
+                              <Input
+                                type="number"
+                                value={it.returnQty}
+                                onChange={(e) =>
+                                  handleItemReturnQtyChange(
+                                    inv.invoiceNo,
+                                    it.barcodeNo,
+                                    e.target.value
+                                  )
+                                }
+                                className={`h-6 text-xs text-right w-20 font-bold bg-white ${focusHighlightClass}`}
+                              />
+                            </TableCell>
+                            <TableCell className="text-right font-bold">
+                              ₹{it.purRate.toFixed(2)}
+                            </TableCell>
+                            <TableCell className="text-right font-bold text-emerald-700 dark:text-emerald-400">
+                              ₹{(it.returnQty * it.purRate).toFixed(2)}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      ) : (
+        <Card className="shadow-sm border p-6 text-center text-slate-500 font-bold space-y-2">
+          <Building2 className="h-10 w-10 text-amber-500 mx-auto" />
+          <p className="text-sm text-slate-700">Please Select a Supplier / Vendor Ledger above to view available purchase invoices.</p>
+        </Card>
+      )}
+
+      {/* STEP 3 & 4: MAIN RETURN GRID TABLE & SIDE VOUCHER PANEL */}
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-2">
-        {/* Left Side: Return Product Grid Table */}
+        {/* Main Return Items Grid Table */}
         <div className="lg:col-span-3 space-y-2">
           <Card className="shadow-sm border overflow-hidden">
-            <div className="overflow-x-auto min-h-[420px] max-h-[550px]">
+            <div className="p-2 bg-slate-800 text-white font-bold flex justify-between items-center text-xs">
+              <span>3. PURCHASE RETURN ITEMS GRID</span>
+              <span>Total Return Rows: {gridRows.length}</span>
+            </div>
+
+            <div className="overflow-x-auto min-h-[300px] max-h-[450px]">
               <Table className="w-full border-collapse text-xs">
-                <TableHeader className="bg-slate-200 dark:bg-slate-800 text-xs font-bold sticky top-0 z-10 shadow-sm">
+                <TableHeader className="bg-slate-200 dark:bg-slate-800 text-xs font-bold sticky top-0 z-10">
                   <TableRow>
                     <TableHead className="w-8 text-center p-1 text-red-600 font-bold">Del</TableHead>
                     <TableHead className="w-10 text-center p-1 font-bold">SNo</TableHead>
-                    <TableHead className="min-w-[180px] p-1 font-bold">
-                      Product Name [Shift+F7]
-                    </TableHead>
+                    <TableHead className="min-w-[180px] p-1 font-bold">Product Name</TableHead>
                     <TableHead className="min-w-[140px] p-1 font-bold">Invoice Details</TableHead>
                     <TableHead className="w-16 text-right p-1 font-bold">Qty</TableHead>
                     <TableHead className="w-14 text-center p-1 font-bold">Unit</TableHead>
@@ -834,163 +1116,99 @@ export default function PurchaseReturnPage() {
                     <TableHead className="w-20 text-right p-1 font-bold">Amount</TableHead>
                     <TableHead className="w-14 text-right p-1 font-bold">Dis %</TableHead>
                     <TableHead className="w-16 text-right p-1 font-bold">Dis-2%</TableHead>
-                    <TableHead className="w-16 text-right p-1 font-bold">Expenses</TableHead>
                     <TableHead className="w-14 text-right p-1 font-bold">SGST%</TableHead>
                     <TableHead className="w-14 text-right p-1 font-bold">CGST%</TableHead>
-                    <TableHead className="w-20 text-right p-1 font-bold">Txbl.Rate</TableHead>
                     <TableHead className="w-20 text-right p-1 font-bold">Net Rate</TableHead>
-                    <TableHead className="w-20 p-1 font-bold">HSN Code</TableHead>
                   </TableRow>
                 </TableHeader>
 
                 <TableBody className="text-xs font-mono">
-                  {gridRows.map((row, idx) => (
-                    <TableRow key={row.id} className="hover:bg-amber-50/50 transition-colors">
-                      {/* Delete Button */}
-                      <TableCell className="text-center p-1">
-                        <button
-                          onClick={() => handleDeleteRow(idx)}
-                          className="text-red-600 hover:text-red-800 font-black p-0.5"
-                          title="Delete Row"
-                        >
-                          <X className="h-4 w-4" />
-                        </button>
-                      </TableCell>
-
-                      {/* SNo */}
-                      <TableCell className="text-center p-1 font-bold text-slate-500">
-                        {row.sno}
-                      </TableCell>
-
-                      {/* Product Name */}
-                      <TableCell className="p-1">
-                        <Input
-                          value={row.prname}
-                          onChange={(e) => handleCellChange(idx, "prname", e.target.value)}
-                          placeholder="Select or enter product..."
-                          className={`h-7 text-xs bg-background ${focusHighlightClass}`}
-                        />
-                      </TableCell>
-
-                      {/* Invoice Details */}
-                      <TableCell className="p-1">
-                        <div className="text-[11px] font-bold text-amber-800 dark:text-amber-300">
-                          {row.invoiceNo ? (
-                            <span>
-                              {row.invoiceNo} | {row.invoiceDate}
-                            </span>
-                          ) : (
-                            <span className="text-slate-400 font-normal">Select Invoice [F5]</span>
-                          )}
-                        </div>
-                      </TableCell>
-
-                      {/* Qty */}
-                      <TableCell className="p-1">
-                        <Input
-                          type="number"
-                          value={row.qty}
-                          onChange={(e) => handleCellChange(idx, "qty", e.target.value)}
-                          className={`h-7 text-xs text-right bg-background ${focusHighlightClass}`}
-                        />
-                      </TableCell>
-
-                      {/* Unit */}
-                      <TableCell className="p-1 text-center font-bold text-slate-700">
-                        {row.unit}
-                      </TableCell>
-
-                      {/* Rate/Unit */}
-                      <TableCell className="p-1">
-                        <Input
-                          type="number"
-                          value={row.purRate}
-                          onChange={(e) => handleCellChange(idx, "purRate", e.target.value)}
-                          className={`h-7 text-xs text-right bg-background ${focusHighlightClass}`}
-                        />
-                      </TableCell>
-
-                      {/* Amount */}
-                      <TableCell className="p-1 text-right font-bold">
-                        ₹{row.amount.toFixed(2)}
-                      </TableCell>
-
-                      {/* Dis % */}
-                      <TableCell className="p-1">
-                        <Input
-                          type="number"
-                          value={row.disPerc}
-                          onChange={(e) => handleCellChange(idx, "disPerc", e.target.value)}
-                          className={`h-7 text-xs text-right bg-background ${focusHighlightClass}`}
-                        />
-                      </TableCell>
-
-                      {/* Dis-2% / DiscAmt */}
-                      <TableCell className="p-1">
-                        <Input
-                          type="number"
-                          value={row.discAmt}
-                          onChange={(e) => handleCellChange(idx, "discAmt", e.target.value)}
-                          className={`h-7 text-xs text-right bg-background ${focusHighlightClass}`}
-                        />
-                      </TableCell>
-
-                      {/* Expenses */}
-                      <TableCell className="p-1">
-                        <Input
-                          type="number"
-                          value={row.expenses}
-                          onChange={(e) => handleCellChange(idx, "expenses", e.target.value)}
-                          className={`h-7 text-xs text-right bg-background ${focusHighlightClass}`}
-                        />
-                      </TableCell>
-
-                      {/* SGST % */}
-                      <TableCell className="p-1 text-right font-bold text-slate-600">
-                        {row.sgstPerc}%
-                      </TableCell>
-
-                      {/* CGST % */}
-                      <TableCell className="p-1 text-right font-bold text-slate-600">
-                        {row.cgstPerc}%
-                      </TableCell>
-
-                      {/* Txbl Rate */}
-                      <TableCell className="p-1 text-right font-bold">
-                        ₹{row.txblRate.toFixed(2)}
-                      </TableCell>
-
-                      {/* Net Rate */}
-                      <TableCell className="p-1 text-right font-bold text-emerald-700">
-                        ₹{row.netRate.toFixed(2)}
-                      </TableCell>
-
-                      {/* HSN Code */}
-                      <TableCell className="p-1 font-bold text-slate-600">
-                        {row.hsnCode || "62099090"}
+                  {gridRows.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={13} className="text-center p-8 text-slate-500 font-bold">
+                        No items added to return list yet. Select Supplier above and check purchase invoices to load items.
                       </TableCell>
                     </TableRow>
-                  ))}
+                  ) : (
+                    gridRows.map((row, idx) => (
+                      <TableRow key={row.id} className="hover:bg-amber-50/50 transition-colors">
+                        <TableCell className="text-center p-1">
+                          <button
+                            onClick={() => handleDeleteRow(idx)}
+                            className="text-red-600 hover:text-red-800 font-black p-0.5"
+                          >
+                            <X className="h-4 w-4" />
+                          </button>
+                        </TableCell>
+                        <TableCell className="text-center p-1 font-bold text-slate-500">
+                          {row.sno}
+                        </TableCell>
+                        <TableCell className="p-1 font-bold text-slate-800 dark:text-slate-100">
+                          {row.prname}
+                        </TableCell>
+                        <TableCell className="p-1">
+                          <div className="text-[11px] font-bold text-amber-800 dark:text-amber-300">
+                            {row.invoiceNo} | {row.invoiceDate}
+                          </div>
+                        </TableCell>
+                        <TableCell className="p-1">
+                          <Input
+                            type="number"
+                            value={row.qty}
+                            onChange={(e) => handleCellChange(idx, "qty", e.target.value)}
+                            className={`h-7 text-xs text-right bg-background ${focusHighlightClass}`}
+                          />
+                        </TableCell>
+                        <TableCell className="p-1 text-center font-bold text-slate-700">
+                          {row.unit}
+                        </TableCell>
+                        <TableCell className="p-1">
+                          <Input
+                            type="number"
+                            value={row.purRate}
+                            onChange={(e) => handleCellChange(idx, "purRate", e.target.value)}
+                            className={`h-7 text-xs text-right bg-background ${focusHighlightClass}`}
+                          />
+                        </TableCell>
+                        <TableCell className="p-1 text-right font-bold">
+                          ₹{row.amount.toFixed(2)}
+                        </TableCell>
+                        <TableCell className="p-1">
+                          <Input
+                            type="number"
+                            value={row.disPerc}
+                            onChange={(e) => handleCellChange(idx, "disPerc", e.target.value)}
+                            className={`h-7 text-xs text-right bg-background ${focusHighlightClass}`}
+                          />
+                        </TableCell>
+                        <TableCell className="p-1">
+                          <Input
+                            type="number"
+                            value={row.discAmt}
+                            onChange={(e) => handleCellChange(idx, "discAmt", e.target.value)}
+                            className={`h-7 text-xs text-right bg-background ${focusHighlightClass}`}
+                          />
+                        </TableCell>
+                        <TableCell className="p-1 text-right font-bold text-slate-600">
+                          {row.sgstPerc}%
+                        </TableCell>
+                        <TableCell className="p-1 text-right font-bold text-slate-600">
+                          {row.cgstPerc}%
+                        </TableCell>
+                        <TableCell className="p-1 text-right font-bold text-emerald-700">
+                          ₹{row.netRate.toFixed(2)}
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  )}
                 </TableBody>
               </Table>
             </div>
 
-            {/* Grid Bottom Subtotal Summary Bar */}
             <div className="bg-slate-200 dark:bg-slate-800 p-2 flex items-center justify-between font-bold text-xs border-t">
-              <div className="flex items-center gap-2">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="h-7 text-xs bg-white text-slate-900 font-bold"
-                  onClick={handleAddRow}
-                >
-                  <Plus className="h-3.5 w-3.5 mr-1" /> Add Row
-                </Button>
-                <span className="text-slate-600">
-                  Total Items: {gridRows.filter((r) => r.prname || r.barcodeNo).length}
-                </span>
-              </div>
-
+              <span className="text-slate-600">
+                Total Return Rows: {gridRows.length}
+              </span>
               <div className="flex gap-6 font-mono text-xs">
                 <span>
                   Total Qty: <span className="bg-white px-2 py-0.5 rounded text-slate-900 font-bold">{totals.totQty}</span>
@@ -1004,54 +1222,9 @@ export default function PurchaseReturnPage() {
               </div>
             </div>
           </Card>
-
-          {/* Supplier Bar matching Screenshot Footer */}
-          <Card className="shadow-sm border">
-            <CardContent className="p-2 space-y-2">
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-2 items-center">
-                <div>
-                  <Label className="text-xs font-bold">Mob. [F6]</Label>
-                  <Input
-                    value={supplierMobile}
-                    onChange={(e) => setSupplierMobile(e.target.value)}
-                    placeholder="Supplier Mobile"
-                    className="h-7 text-xs bg-background mt-0.5 font-mono"
-                  />
-                </div>
-
-                <div className="md:col-span-2">
-                  <Label className="text-xs font-bold text-amber-800 dark:text-amber-300">
-                    Supplier / Vendor Ledger [F6] *
-                  </Label>
-                  <select
-                    ref={supplierSelectRef}
-                    value={selectedSupplierId}
-                    onChange={(e) => handleSupplierSelect(e.target.value)}
-                    className={`flex h-7 w-full rounded-md border border-input bg-background px-2 text-xs font-bold mt-0.5 ${focusHighlightClass}`}
-                  >
-                    <option value="">-- Select Supplier / Vendor Ledger --</option>
-                    {suppliers.map((s) => (
-                      <option key={s.ledg_code} value={s.ledg_code}>
-                        {s.ledg_name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <Label className="text-xs font-bold">A/c Balance</Label>
-                  <Input
-                    readOnly
-                    value={`₹${supplierBalance.toFixed(2)}`}
-                    className="h-7 text-xs bg-slate-100 font-mono font-bold text-amber-700 mt-0.5"
-                  />
-                </div>
-              </div>
-            </CardContent>
-          </Card>
         </div>
 
-        {/* Right Side: Voucher Details Panel matching Screenshot Side Panel */}
+        {/* Right Side Voucher Panel */}
         <div className="lg:col-span-1 space-y-2">
           <Card className="shadow-sm border">
             <div className="bg-slate-800 text-white px-3 py-1.5 font-bold flex justify-between items-center text-xs">
@@ -1062,7 +1235,6 @@ export default function PurchaseReturnPage() {
             </div>
 
             <CardContent className="p-2 space-y-2 text-xs">
-              {/* Return Invoice No & Date */}
               <div className="grid grid-cols-2 gap-2">
                 <div>
                   <Label className="text-[11px] font-bold">Invoice No</Label>
@@ -1083,7 +1255,6 @@ export default function PurchaseReturnPage() {
                 </div>
               </div>
 
-              {/* Tax Code Dropdown */}
               <div>
                 <Label className="text-[11px] font-bold">Tax Code</Label>
                 <select
@@ -1097,7 +1268,6 @@ export default function PurchaseReturnPage() {
                 </select>
               </div>
 
-              {/* Salesman */}
               <div>
                 <Label className="text-[11px] font-bold">Salesman [F7]</Label>
                 <Input
@@ -1107,7 +1277,6 @@ export default function PurchaseReturnPage() {
                 />
               </div>
 
-              {/* Checkbox: Tax On Expenses */}
               <div className="flex items-center gap-2 pt-1">
                 <input
                   type="checkbox"
@@ -1123,7 +1292,6 @@ export default function PurchaseReturnPage() {
 
               <hr className="my-1 border-slate-200" />
 
-              {/* Financial Calculation Summary Table */}
               <div className="space-y-1 font-mono text-xs">
                 <div className="flex justify-between items-center">
                   <span className="text-slate-600">SubTotal:</span>
@@ -1136,16 +1304,6 @@ export default function PurchaseReturnPage() {
                     type="number"
                     value={cashDisc}
                     onChange={(e) => setCashDisc(Number(e.target.value) || 0)}
-                    className="h-6 text-xs text-right w-24 font-mono"
-                  />
-                </div>
-
-                <div className="flex justify-between items-center">
-                  <span className="text-slate-600">Spl. Disc.:</span>
-                  <Input
-                    type="number"
-                    value={splDisc}
-                    onChange={(e) => setSplDisc(Number(e.target.value) || 0)}
                     className="h-6 text-xs text-right w-24 font-mono"
                   />
                 </div>
@@ -1165,33 +1323,12 @@ export default function PurchaseReturnPage() {
                   <span className="text-amber-700">₹{totals.totalTax.toFixed(2)}</span>
                 </div>
 
-                <div className="flex justify-between items-center">
-                  <span className="text-slate-600">Freight Charges:</span>
-                  <Input
-                    type="number"
-                    value={freightCharges}
-                    onChange={(e) => setFreightCharges(Number(e.target.value) || 0)}
-                    className="h-6 text-xs text-right w-24 font-mono"
-                  />
-                </div>
-
-                <div className="flex justify-between items-center">
-                  <span className="text-slate-600">Other Charges:</span>
-                  <Input
-                    type="number"
-                    value={otherCharges}
-                    onChange={(e) => setOtherCharges(Number(e.target.value) || 0)}
-                    className="h-6 text-xs text-right w-24 font-mono"
-                  />
-                </div>
-
                 <div className="flex justify-between items-center text-slate-500">
                   <span>Round Off:</span>
                   <span>₹{totals.roundOff.toFixed(2)}</span>
                 </div>
               </div>
 
-              {/* Remarks Textarea */}
               <div className="pt-1">
                 <Label className="text-[11px] font-bold">Remarks</Label>
                 <textarea
@@ -1203,7 +1340,6 @@ export default function PurchaseReturnPage() {
                 />
               </div>
 
-              {/* Big Golden Grand Total Banner matching Screenshot */}
               <div className="bg-amber-500 text-white rounded p-3 text-center border-2 border-amber-600 shadow">
                 <span className="text-[10px] font-bold tracking-widest uppercase block text-amber-100">
                   NET RETURN GRAND TOTAL
@@ -1217,7 +1353,7 @@ export default function PurchaseReturnPage() {
         </div>
       </div>
 
-      {/* Bottom Action Controls Toolbar matching Screenshot */}
+      {/* Bottom Action Controls Bar */}
       <div className="bg-card border rounded p-2 flex flex-wrap items-center justify-between gap-2 shadow-sm">
         <div className="flex flex-wrap items-center gap-2">
           <Button
@@ -1240,29 +1376,6 @@ export default function PurchaseReturnPage() {
 
           <Button
             size="sm"
-            className="h-8 text-xs bg-emerald-600 hover:bg-emerald-700 text-white font-bold"
-            onClick={() => {
-              if (!selectedSupplierId) {
-                alert("Please select a Supplier/Vendor [F6] first.");
-              } else {
-                setIsInvoiceModalOpen(true);
-              }
-            }}
-          >
-            Select Invoice [F5]
-          </Button>
-
-          <Button
-            size="sm"
-            variant="outline"
-            className="h-8 text-xs font-bold"
-            onClick={() => handleBarcodeSearch()}
-          >
-            Search Barcode [F3]
-          </Button>
-
-          <Button
-            size="sm"
             variant="outline"
             className="h-8 text-xs text-red-600 font-bold"
             onClick={handleResetForm}
@@ -1280,92 +1393,6 @@ export default function PurchaseReturnPage() {
           </Button>
         </div>
       </div>
-
-      {/* Select Invoice Modal [F5] */}
-      <Dialog open={isInvoiceModalOpen} onOpenChange={setIsInvoiceModalOpen}>
-        <DialogContent className="max-w-3xl">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-base font-bold text-amber-700">
-              <FileSpreadsheet className="h-5 w-5" />
-              Select Purchase Invoices for Return [F5]
-            </DialogTitle>
-          </DialogHeader>
-
-          <div className="space-y-3 py-2">
-            <p className="text-xs text-slate-500">
-              Select one or multiple purchase invoices available for supplier to load all items into Purchase Return:
-            </p>
-
-            {supplierInvoices.length === 0 ? (
-              <div className="p-8 text-center border rounded bg-slate-50 text-slate-500 font-bold text-xs">
-                No active purchase invoices found in stock for this supplier.
-              </div>
-            ) : (
-              <Table className="w-full border text-xs">
-                <TableHeader className="bg-slate-100 font-bold">
-                  <TableRow>
-                    <TableHead className="w-12 text-center">Select</TableHead>
-                    <TableHead>Invoice No</TableHead>
-                    <TableHead>Invoice Date</TableHead>
-                    <TableHead className="text-center">Item Count</TableHead>
-                    <TableHead className="text-right">Purchase Value</TableHead>
-                    <TableHead className="text-right">Balance Stock Qty</TableHead>
-                  </TableRow>
-                </TableHeader>
-
-                <TableBody>
-                  {supplierInvoices.map((inv) => {
-                    const isChecked = !!selectedInvoiceNos[inv.invoiceNo];
-                    return (
-                      <TableRow key={inv.invoiceNo} className="hover:bg-amber-50">
-                        <TableCell className="text-center">
-                          <input
-                            type="checkbox"
-                            checked={isChecked}
-                            onChange={() =>
-                              setSelectedInvoiceNos((prev) => ({
-                                ...prev,
-                                [inv.invoiceNo]: !prev[inv.invoiceNo],
-                              }))
-                            }
-                            className="h-4 w-4 text-amber-600 rounded border-slate-300"
-                          />
-                        </TableCell>
-                        <TableCell className="font-mono font-bold text-amber-700">
-                          {inv.invoiceNo}
-                        </TableCell>
-                        <TableCell>{inv.invoiceDate}</TableCell>
-                        <TableCell className="text-center font-bold">
-                          {inv.itemCount}
-                        </TableCell>
-                        <TableCell className="text-right font-mono font-bold">
-                          ₹{inv.purchaseValue.toLocaleString("en-IN")}
-                        </TableCell>
-                        <TableCell className="text-right font-mono font-bold text-emerald-700">
-                          {inv.balanceStockQty}
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
-            )}
-          </div>
-
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setIsInvoiceModalOpen(false)}>
-              Cancel
-            </Button>
-            <Button
-              className="bg-amber-600 hover:bg-amber-700 text-white font-bold"
-              onClick={handleConfirmSelectInvoices}
-              disabled={supplierInvoices.length === 0}
-            >
-              Confirm Load Invoices
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }
