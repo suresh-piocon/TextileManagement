@@ -86,7 +86,7 @@ export default function RetailSalePOSPage() {
   );
 
   // Voucher Details Panel (Image 3)
-  const [invoiceNo, setInvoiceNo] = useState<string>("1");
+  const [invoiceNo, setInvoiceNo] = useState<string>("POS-1001");
   const [invoiceTime, setInvoiceTime] = useState<string>("17:48:48");
   const [invoiceDate, setInvoiceDate] = useState<string>(
     new Date().toISOString().split("T")[0]
@@ -191,9 +191,10 @@ export default function RetailSalePOSPage() {
 
       if (soldData) setSavedInvoices(soldData);
 
-      // Auto Invoice Number
+      // Auto Invoice Number with POS- Prefix
       if (mode === "add") {
-        setInvoiceNo(`${(soldData?.length || 0) + 1}`);
+        const nextNum = (soldData?.length || 0) + 1001;
+        setInvoiceNo(`POS-${nextNum}`);
       }
     } catch (e) {
       console.error("Error fetching initial POS data:", e);
@@ -471,7 +472,7 @@ export default function RetailSalePOSPage() {
     });
   };
 
-  // Confirm & Save POS Invoice (Image 1 Save [F10])
+  // Confirm & Save POS Invoice (Image 1 Save [F10]) with Duplicate Financial Year Invoice Check
   const handleFinalSaveInvoice = async () => {
     if (!company?.frm_code) return;
 
@@ -486,7 +487,25 @@ export default function RetailSalePOSPage() {
     setSaveSuccess(null);
 
     try {
-      // Update bar_temp to set sold_status = 'S' (Sold)
+      // 1. Strict Financial Year Duplicate Invoice Check
+      if (mode === "add") {
+        const { data: existing } = await supabase
+          .from("bar_temp")
+          .select("bar_no")
+          .eq("frm_code", company.frm_code)
+          .eq("sold_status", "S")
+          .ilike("bar_no", `%${invoiceNo}%`);
+
+        if (existing && existing.length > 0) {
+          alert(
+            `Duplicate Invoice Error!\nPOS Invoice No "${invoiceNo}" already exists for this financial year. Duplicate entries are strictly prohibited.`
+          );
+          setLoading(false);
+          return;
+        }
+      }
+
+      // 2. Update bar_temp to set sold_status = 'S' (Sold)
       const barcodeList = gridRows.map((r) => r.productCode).filter(Boolean);
       if (barcodeList.length > 0) {
         await supabase
@@ -515,10 +534,44 @@ export default function RetailSalePOSPage() {
     }
   };
 
+  // Delete POS Invoice Record (Delete [F9])
+  const handleDeleteInvoice = async () => {
+    if (!company?.frm_code) return;
+
+    if (mode !== "edit" || gridRows.length === 0) {
+      alert("Delete is only available when viewing an existing saved POS invoice record.");
+      return;
+    }
+
+    if (!confirm(`Are you sure you want to delete POS Invoice ${invoiceNo}?`)) {
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const barcodeList = gridRows.map((r) => r.productCode).filter(Boolean);
+      if (barcodeList.length > 0) {
+        await supabase
+          .from("bar_temp")
+          .update({ sold_status: "A" })
+          .in("bar_no", barcodeList)
+          .eq("frm_code", company.frm_code);
+      }
+
+      alert(`POS Invoice ${invoiceNo} deleted successfully and items returned to stock!`);
+      handleResetForm();
+    } catch (e: any) {
+      console.error("Delete error:", e);
+      alert(`Failed to delete POS Invoice: ${e.message || e}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // Load Saved Invoice for Prev / Next Navigation
   const loadSavedInvoiceRecord = (barRecord: any) => {
     if (!barRecord) return;
-    setInvoiceNo(`POS-${barRecord.bar_ref_id || 1}`);
+    setInvoiceNo(`POS-${barRecord.bar_ref_id || 1001}`);
     const rate = barRecord.pc_sale_rate || 1500;
     const row: POSGridRow = {
       id: `pos-prev-${barRecord.bar_no}`,
@@ -609,6 +662,9 @@ export default function RetailSalePOSPage() {
       } else if (e.key === "F8") {
         e.preventDefault();
         if (!isPaymentModalOpen) handleOpenPaymentModal();
+      } else if (e.key === "F9") {
+        e.preventDefault();
+        if (mode === "edit") handleDeleteInvoice();
       } else if (e.key === "F10") {
         e.preventDefault();
         if (isPaymentModalOpen) {
@@ -626,7 +682,7 @@ export default function RetailSalePOSPage() {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [gridRows, totals.grandTotal, isPaymentModalOpen, isStockModalOpen, stockItems, selectedStockRowIndex, savedInvoices, currentIndex]);
+  }, [gridRows, totals.grandTotal, isPaymentModalOpen, isStockModalOpen, stockItems, selectedStockRowIndex, savedInvoices, currentIndex, mode]);
 
   return (
     <div className="min-h-screen bg-slate-200 dark:bg-slate-900 p-1.5 space-y-1.5 font-sans text-xs">
@@ -837,7 +893,7 @@ export default function RetailSalePOSPage() {
                   <Input
                     readOnly
                     value={invoiceNo}
-                    className="h-6 text-xs text-right w-16 bg-white"
+                    className="h-6 text-xs text-right w-24 bg-white font-bold"
                   />
                   <span className="text-[10px] text-slate-500">{invoiceTime}</span>
                 </div>
@@ -1000,7 +1056,7 @@ export default function RetailSalePOSPage() {
         </div>
       </div>
 
-      {/* BOTTOM ACTION BUTTONS TOOLBAR (Image 3) */}
+      {/* BOTTOM ACTION BUTTONS TOOLBAR (Added Delete F9 and Cancel Esc buttons) */}
       <div className="bg-white dark:bg-slate-800 p-1.5 rounded border flex flex-wrap items-center justify-between gap-2 shadow-sm">
         <div className="flex flex-wrap items-center gap-1.5">
           <Button
@@ -1016,6 +1072,23 @@ export default function RetailSalePOSPage() {
             onClick={handleOpenPaymentModal}
           >
             Payment Details [F8]
+          </Button>
+          <Button
+            size="sm"
+            variant="destructive"
+            className="h-7 text-xs font-bold border px-3"
+            onClick={handleDeleteInvoice}
+            disabled={mode !== "edit"}
+          >
+            Delete [F9]
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 text-xs text-red-600 font-bold border px-3"
+            onClick={handleResetForm}
+          >
+            Cancel [Esc]
           </Button>
         </div>
 
