@@ -644,12 +644,11 @@ export default function RetailSalePOSPage() {
         const netRate = r.qty > 0 ? r.amount / r.qty : r.rateUnit;
         return `
           <tr>
-            <td style="padding: 2px 0; font-weight: bold; width: 40%; text-align: left;">${r.productName}</td>
-            <td style="text-align: right; padding: 2px 0; width: 12%;">${r.qty.toFixed(2)}</td>
-            <td style="text-align: center; padding: 2px 0; width: 10%;">${r.unitName}</td>
-            <td style="text-align: right; padding: 2px 0; width: 13%;">${r.rateUnit.toFixed(2)}</td>
-            <td style="text-align: right; padding: 2px 0; width: 12%;">${netRate.toFixed(2)}</td>
-            <td style="text-align: right; padding: 2px 0; font-weight: bold; width: 13%;">${r.amount.toFixed(2)}</td>
+            <td style="padding: 2px 0; font-weight: bold; width: 44%; text-align: left;">${r.productName}</td>
+            <td style="text-align: right; padding: 2px 0; width: 14%;">${r.qty.toFixed(2)}</td>
+            <td style="text-align: center; padding: 2px 0; width: 12%;">${r.unitName}</td>
+            <td style="text-align: right; padding: 2px 0; width: 15%;">${r.rateUnit.toFixed(2)}</td>
+            <td style="text-align: right; padding: 2px 0; font-weight: bold; width: 15%;">${netRate.toFixed(2)}</td>
           </tr>
         `;
       })
@@ -734,12 +733,11 @@ export default function RetailSalePOSPage() {
           <table>
             <thead>
               <tr>
-                <th style="width: 40%;">PARTICULARS/HSN</th>
-                <th style="text-align: right; width: 12%;">QTY</th>
-                <th style="text-align: center; width: 10%;">UNIT</th>
-                <th style="text-align: right; width: 13%;">SALE RATE</th>
-                <th style="text-align: right; width: 12%;">NET RATE</th>
-                <th style="text-align: right; width: 13%;">AMOUNT</th>
+                <th style="width: 44%;">PARTICULARS/HSN</th>
+                <th style="text-align: right; width: 14%;">QTY</th>
+                <th style="text-align: center; width: 12%;">UNIT</th>
+                <th style="text-align: right; width: 15%;">SALE RATE</th>
+                <th style="text-align: right; width: 15%;">NET RATE</th>
               </tr>
             </thead>
             <tbody>
@@ -826,8 +824,7 @@ export default function RetailSalePOSPage() {
   // Load Saved Invoice for Prev / Next Navigation
   const loadSavedInvoiceRecord = (barRecord: any) => {
     if (!barRecord) return;
-    const seq = barRecord.bar_ref_id || 1;
-    setInvoiceNo(`POS-${String(seq).padStart(6, "0")}`);
+    setInvoiceNo(barRecord.inv_no || "POS-000001");
     const rate = barRecord.pc_sale_rate || 1500;
     const prcodeStr = String(barRecord.prcode || 101);
     const taxInfo = productTaxMap.get(prcodeStr) || { gstPerc: 5, hsnCode: "50079010" };
