@@ -29,7 +29,7 @@ import {
   Square,
 } from "lucide-react";
 import seedProductsData from "@/lib/data/batch-movement-seed.json";
-import XLSX from "xlsx";
+import * as XLSX from "xlsx";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 
