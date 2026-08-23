@@ -191,17 +191,50 @@ export default function PurchaseReturnPage() {
       }
 
       try {
-        const { data: barRows } = await supabase
-          .from("bar_temp")
-          .select("*")
-          .eq("frm_code", company.frm_code)
-          .eq("cr_code", supplierId)
-          .eq("sold_status", "A");
+        // 1. Fetch Barcode Master Records and Purchase Return Child Records in Parallel
+        const [barRes, purRetRes] = await Promise.all([
+          supabase
+            .from("bar_temp")
+            .select("*")
+            .eq("frm_code", company.frm_code)
+            .eq("cr_code", supplierId)
+            .eq("sold_status", "A")
+            .order("bar_ref_id", { ascending: true }),
+          supabase
+            .from("pur_ret_child")
+            .select("prc_prcode, prc_qty")
+            .eq("frm_code", company.frm_code),
+        ]);
 
-        if (barRows && barRows.length > 0) {
+        const barRows = barRes.data || [];
+        const purRetRows = purRetRes.data || [];
+
+        // Calculate total returned items count per product code
+        const returnedCountMap = new Map<number, number>();
+        purRetRows.forEach((r: any) => {
+          const pCode = r.prc_prcode || 0;
+          const q = r.prc_qty || 1;
+          returnedCountMap.set(pCode, (returnedCountMap.get(pCode) || 0) + q);
+        });
+
+        // Exclude already returned items per product code
+        const returnedSkipMap = new Map<number, number>();
+        const availableBarRows = barRows.filter((bar: any) => {
+          const pCode = bar.prcode || 0;
+          const totalReturned = returnedCountMap.get(pCode) || 0;
+          const currentlySkipped = returnedSkipMap.get(pCode) || 0;
+
+          if (currentlySkipped < totalReturned) {
+            returnedSkipMap.set(pCode, currentlySkipped + 1);
+            return false; // Exclude returned item!
+          }
+          return true; // Keep available item!
+        });
+
+        if (availableBarRows.length > 0) {
           const invMap = new Map<string, SupplierInvoiceItem[]>();
 
-          barRows.forEach((bar: any) => {
+          availableBarRows.forEach((bar: any) => {
             const invNo = bar.inv_no || "PI-1025";
             const invDate = bar.inv_date
               ? new Date(bar.inv_date).toLocaleDateString("en-IN")
