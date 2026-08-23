@@ -563,20 +563,21 @@ function PurchaseTransactionContent() {
         ? remarks 
         : formatRemarksString(invoiceNo || refNo, invoiceDate, totalQty);
 
-      // 1. AVOID DUPLICATE INVOICE ENTRY IN ADD MODE
+      // 1. AVOID DUPLICATE INVOICE ENTRY FOR SAME SUPPLIER IN SAME FINANCIAL YEAR
       if (mode === 'add') {
         const { data: dupCheck } = await supabase
           .from('pur_mast')
-          .select('pm_ref_no')
+          .select('pm_ref_no, pm_bill_ref_no, pm_bill_date')
           .eq('pm_frm_code', company.frm_code)
           .eq('pm_cr_code', parseInt(selectedVendorId))
-          .eq('pm_bill_ref_no', invoiceNo)
-          .eq('pm_bill_date', invoiceDate);
+          .ilike('pm_bill_ref_no', invoiceNo.trim());
 
         if (dupCheck && dupCheck.length > 0) {
+          const suppName = selectedVendor?.ledg_name || 'this supplier';
+          alert(`Duplicate Purchase Invoice Blocked!\nInvoice No "${invoiceNo}" for ${suppName} already exists in this financial year.`);
           toast({
             title: 'Duplicate Invoice Entry Blocked!',
-            description: `Invoice No #${invoiceNo} dated ${invoiceDate} for this vendor already exists in this financial year.`,
+            description: `Invoice No #${invoiceNo} for ${suppName} already exists in this financial year.`,
             variant: 'destructive'
           });
           setLoading(false);
