@@ -45,36 +45,28 @@ import {
 interface POSGridRow {
   id: string;
   sno: number;
-  barcodeNo: string;
+  productCode: string;
   batchNo: string;
   prcode: number;
-  prname: string;
-  color?: string;
-  size?: string;
-  isBatchItem: boolean;
+  productName: string;
   qty: number;
-  maxStockQty: number;
-  unit: string;
-  purRate: number;
-  saleRate: number;
+  unitName: string;
+  unit: number;
+  gross: number;
+  rateUnit: number;
   amount: number;
   disPerc: number;
-  discAmt: number;
   sgstPerc: number;
   cgstPerc: number;
   igstPerc: number;
-  netAmount: number;
+  isBatchItem: boolean;
+  maxStockQty: number;
 }
 
-interface PaymentSplit {
-  cash: number;
-  upi: number;
-  bankTransfer: number;
-  neft: number;
-  creditCard: number;
-  debitCard: number;
-  others: number;
-  otherRemarks: string;
+interface PaymentRow {
+  type: string;
+  amount: number;
+  remarks: string;
 }
 
 export default function RetailSalePOSPage() {
@@ -87,57 +79,60 @@ export default function RetailSalePOSPage() {
   const [loading, setLoading] = useState<boolean>(false);
   const [saveSuccess, setSaveSuccess] = useState<string | null>(null);
 
-  // Header POS Sales Info
-  const [invoiceNo, setInvoiceNo] = useState<string>("POS-1001");
-  const [invoiceDate, setInvoiceDate] = useState<string>(
-    new Date().toISOString().split("T")[0]
-  );
-  const [userName] = useState<string>("admin");
-  const [counterName] = useState<string>("Counter 1");
-  const [shiftName] = useState<string>("General Shift");
-  const [billType, setBillType] = useState<string>("CASH"); // CASH | CREDIT | CARD / UPI
-  const [salesperson, setSalesperson] = useState<string>("Direct");
-
-  // Customer State (F6)
-  const [customers, setCustomers] = useState<any[]>([]);
-  const [selectedCustomerId, setSelectedCustomerId] = useState<number | "">("");
-  const [selectedCustomerObj, setSelectedCustomerObj] = useState<any | null>(null);
-  const [customerMobile, setCustomerMobile] = useState<string>("");
-  const [customerBalance, setCustomerBalance] = useState<number>(0);
-
-  // Barcode & Stock Scan Input (F3 / Insert)
+  // Top Bar Info
+  const [saleType, setSaleType] = useState<string>("SALES");
   const [scanInput, setScanInput] = useState<string>("");
   const scanInputRef = useRef<HTMLInputElement>(null);
 
-  // Invoice Items Grid
-  const [gridRows, setGridRows] = useState<POSGridRow[]>([]);
+  // Stock Summary Banner line (Image 2: C-Rate: T.TT, S-Rate: T.TT : Stock : 10 PCS)
+  const [stockBannerText, setStockBannerText] = useState<string>(
+    "C-Rate: T.TT, S-Rate: T.TT : Stock : 30 PCS"
+  );
 
-  // Discounts & Tax Settings
+  // Voucher Details Panel (Image 2)
+  const [invoiceNo, setInvoiceNo] = useState<string>("1");
+  const [invoiceTime, setInvoiceTime] = useState<string>("08:20:55");
+  const [invoiceDate, setInvoiceDate] = useState<string>(
+    new Date().toISOString().split("T")[0]
+  );
+  const [salesman, setSalesman] = useState<string>("Direct");
   const [cashDisc, setCashDisc] = useState<number>(0);
   const [splDisc, setSplDisc] = useState<number>(0);
-  const [taxCode, setTaxCode] = useState<string>("LOCAL"); // LOCAL | INTERSTATE
+  const [expensesAmt, setExpensesAmt] = useState<number>(0);
+  const [remarks, setRemarks] = useState<string>("");
 
-  // Saved Invoices List for Navigation (PgUp / PgDn)
+  // Customer Details Bar (Image 2)
+  const [customerMobile, setCustomerMobile] = useState<string>("");
+  const [customerName, setCustomerName] = useState<string>("Sumit");
+  const [customerEmail, setCustomerEmail] = useState<string>("");
+  const [customerBalance, setCustomerBalance] = useState<number>(10000);
+  const [customerBday, setCustomerBday] = useState<string>("");
+
+  // Customers & Stock Lists from DB
+  const [customers, setCustomers] = useState<any[]>([]);
+  const [stockItems, setStockItems] = useState<any[]>([]);
   const [savedInvoices, setSavedInvoices] = useState<any[]>([]);
   const [currentIndex, setCurrentIndex] = useState<number>(-1);
 
-  // Payment Collection Modal State (F10 / Ctrl+P)
-  const [isPaymentModalOpen, setIsPaymentModalOpen] = useState<boolean>(false);
-  const [payments, setPayments] = useState<PaymentSplit>({
-    cash: 0,
-    upi: 0,
-    bankTransfer: 0,
-    neft: 0,
-    creditCard: 0,
-    debitCard: 0,
-    others: 0,
-    otherRemarks: "",
-  });
+  // Main POS Grid Rows
+  const [gridRows, setGridRows] = useState<POSGridRow[]>([]);
 
-  // Stock List & Selection Popup Modal (F8)
+  // Modals state: Stock Modal (Image 3) and Payment Modal (Image 4)
+  // DO NOT AUTO OPEN STOCK MODAL ON LOAD PER USER DIRECTIVE
   const [isStockModalOpen, setIsStockModalOpen] = useState<boolean>(false);
-  const [availableStockItems, setAvailableStockItems] = useState<any[]>([]);
-  const [stockSearchQuery, setStockSearchQuery] = useState<string>("");
+  const [isPaymentModalOpen, setIsPaymentModalOpen] = useState<boolean>(false);
+
+  // Stock Modal Selected Row (Image 3)
+  const [selectedStockRowIndex, setSelectedStockRowIndex] = useState<number>(0);
+
+  // Payment Breakdown Table (Image 4)
+  const [paymentRows, setPaymentRows] = useState<PaymentRow[]>([
+    { type: "CASH", amount: 0, remarks: "" },
+    { type: "CN/ADVANCE", amount: 0, remarks: "" },
+    { type: "HDFC CARD", amount: 0, remarks: "" },
+    { type: "KOTAK", amount: 0, remarks: "" },
+    { type: "UPI / QR CODE", amount: 0, remarks: "" },
+  ]);
 
   // Focus Highlight Class
   const focusHighlightClass =
@@ -147,7 +142,10 @@ export default function RetailSalePOSPage() {
   const fetchInitialData = useCallback(async () => {
     if (!company?.frm_code) return;
     try {
-      // 1. Fetch Customers (Ledgers under Customers)
+      // Update Invoice Time
+      setInvoiceTime(new Date().toLocaleTimeString());
+
+      // 1. Fetch Customers
       const { data: cData } = await supabase
         .from("ledger")
         .select("*")
@@ -164,12 +162,16 @@ export default function RetailSalePOSPage() {
         .eq("sold_status", "A")
         .order("bar_ref_id", { ascending: true });
 
-      if (barData) setAvailableStockItems(barData);
+      if (barData) {
+        setStockItems(barData);
+        setStockBannerText(
+          `C-Rate: T.TT, S-Rate: T.TT : Stock : ${barData.length} PCS`
+        );
+      }
 
-      // Set auto POS invoice sequence
+      // Auto Invoice Number
       if (mode === "add") {
-        const nextSeq = (savedInvoices.length || 0) + 1;
-        setInvoiceNo(`POS-${1000 + nextSeq}`);
+        setInvoiceNo(`${(savedInvoices.length || 0) + 1}`);
       }
     } catch (e) {
       console.error("Error fetching initial POS data:", e);
@@ -180,36 +182,19 @@ export default function RetailSalePOSPage() {
     fetchInitialData();
   }, [fetchInitialData]);
 
-  // Focus Scan Box on Open & Reset
+  // Focus Scan Box on Open & Reset (DO NOT AUTO-OPEN STOCK MODAL)
   useEffect(() => {
     scanInputRef.current?.focus();
   }, []);
 
-  // Customer Selection Handler (F6)
-  const handleCustomerSelect = (customerIdStr: string) => {
-    const cId = Number(customerIdStr);
-    setSelectedCustomerId(cId);
-
-    const cust = customers.find((c) => c.ledg_code === cId);
-    if (cust) {
-      setSelectedCustomerObj(cust);
-      setCustomerMobile(cust.ph_no || cust.cell_no1 || cust.cell_no || "");
-      setCustomerBalance(cust.bal_amt || cust.op_bal || 0);
-    } else {
-      setSelectedCustomerObj(null);
-      setCustomerMobile("");
-      setCustomerBalance(0);
-    }
-  };
-
-  // Barcode / Batch Scan Handler (Step 2 & 3)
-  const handleScanBarcode = async (inputVal?: string) => {
+  // Barcode / Product Code Scan Handler
+  const handleScanProductCode = async (inputVal?: string) => {
     const query = (inputVal || scanInput).trim().toUpperCase();
     if (!query || !company?.frm_code) return;
 
     // Check if barcode is already added to grid
     const alreadyAdded = gridRows.find(
-      (r) => r.barcodeNo.toUpperCase() === query
+      (r) => r.productCode.toUpperCase() === query
     );
     if (alreadyAdded) {
       alert(`Barcode "${query}" is already added to this invoice!`);
@@ -218,7 +203,6 @@ export default function RetailSalePOSPage() {
     }
 
     try {
-      // Search stock in bar_temp
       const { data: barRows } = await supabase
         .from("bar_temp")
         .select("*")
@@ -231,7 +215,7 @@ export default function RetailSalePOSPage() {
           const status = (bar.sold_status || "A").toUpperCase();
 
           if (status === "S") {
-            alert(`Barcode "${bar.bar_no}" is already sold to another customer.`);
+            alert(`Barcode "${bar.bar_no}" is already sold.`);
             setScanInput("");
             return;
           }
@@ -241,50 +225,46 @@ export default function RetailSalePOSPage() {
             return;
           }
 
-          // Add exact item to grid automatically
           addStockItemToGrid(bar);
           setScanInput("");
         } else {
-          // Multiple records found -> Display Stock Selection Window Popup
-          setAvailableStockItems(barRows);
+          // Multiple matches found -> Open Stock Selection Window (Image 3)
+          setStockItems(barRows);
           setIsStockModalOpen(true);
         }
       } else {
-        alert(`Barcode / Product "${query}" not found in available stock.`);
+        alert(`Product Code / Barcode "${query}" not found in available stock.`);
         setScanInput("");
       }
     } catch (e) {
-      console.error("Barcode scan error:", e);
+      console.error("Scan error:", e);
     }
   };
 
-  // Add Item to Grid (Step 3 & 4)
+  // Add Item to POS Grid
   const addStockItemToGrid = (bar: any) => {
-    const saleRate = bar.pc_sale_rate || bar.tag_rate || 1200;
-    const purRate = bar.pc_pur_rate || 1000;
+    const saleRate = bar.pc_sale_rate || bar.tag_rate || 10000;
+    const purRate = bar.pc_pur_rate || 8500;
 
     const newRow: POSGridRow = {
-      id: `pos-${bar.bar_no}-${Date.now()}`,
+      id: `pos-item-${bar.bar_no}-${Date.now()}`,
       sno: gridRows.length + 1,
-      barcodeNo: bar.bar_no,
+      productCode: bar.bar_no,
       batchNo: bar.bar_no,
       prcode: bar.prcode || 101,
-      prname: bar.grp_name || "SILK SAREE / DHOTHIES SET",
-      color: "Red / Gold",
-      size: "Free Size",
-      isBatchItem: false,
-      qty: 1, // Barcode item qty fixed = 1
-      maxStockQty: bar.qty || 1,
-      unit: bar.unit_name || "NOS",
-      purRate: purRate,
-      saleRate: saleRate,
+      productName: bar.grp_name || "DESIGNER SAREE",
+      qty: 1,
+      unitName: bar.unit_name || "PCS",
+      unit: 1,
+      gross: 1,
+      rateUnit: saleRate,
       amount: saleRate,
       disPerc: 0,
-      discAmt: 0,
-      sgstPerc: taxCode === "INTERSTATE" ? 0 : 2.5,
-      cgstPerc: taxCode === "INTERSTATE" ? 0 : 2.5,
-      igstPerc: taxCode === "INTERSTATE" ? 5 : 0,
-      netAmount: saleRate,
+      sgstPerc: 6,
+      cgstPerc: 6,
+      igstPerc: 0,
+      isBatchItem: false,
+      maxStockQty: bar.qty || 1,
     };
 
     setGridRows((prev) => [...prev, newRow]);
@@ -301,39 +281,25 @@ export default function RetailSalePOSPage() {
       const row = { ...updated[index] };
 
       if (field === "qty") {
-        if (!row.isBatchItem) {
-          alert("Unique barcode item quantity is fixed at 1.");
-          row.qty = 1;
-        } else {
-          const parsed = Math.max(1, Number(value) || 1);
-          if (parsed > row.maxStockQty) {
-            alert(`Selling quantity (${parsed}) cannot exceed stock available (${row.maxStockQty}).`);
-            row.qty = row.maxStockQty;
-          } else {
-            row.qty = parsed;
-          }
-        }
-      } else if (field === "saleRate") {
-        row.saleRate = Math.max(0, Number(value) || 0);
+        const parsed = Math.max(1, Number(value) || 1);
+        row.qty = parsed;
+      } else if (field === "rateUnit") {
+        row.rateUnit = Math.max(0, Number(value) || 0);
       } else if (field === "disPerc") {
         row.disPerc = Math.max(0, Number(value) || 0);
-        row.discAmt = (row.qty * row.saleRate * row.disPerc) / 100;
-      } else if (field === "discAmt") {
-        row.discAmt = Math.max(0, Number(value) || 0);
       } else {
         (row as any)[field] = value;
       }
 
-      const grossAmount = row.qty * row.saleRate - row.discAmt;
-      row.amount = Math.max(0, grossAmount);
-      row.netAmount = Math.max(0, grossAmount);
+      const discAmt = (row.qty * row.rateUnit * row.disPerc) / 100;
+      row.amount = Math.max(0, row.qty * row.rateUnit - discAmt);
 
       updated[index] = row;
       return updated;
     });
   };
 
-  // Delete Grid Row
+  // Delete Row
   const handleDeleteRow = (index: number) => {
     setGridRows((prev) =>
       prev
@@ -342,36 +308,36 @@ export default function RetailSalePOSPage() {
     );
   };
 
-  // Calculations Summary
+  // Calculations Summary (Image 2 Voucher Details Panel)
   const totals = useMemo(() => {
-    let totQty = 0;
+    let totalQty = 0;
     let subTotal = 0;
     let totDiscAmt = 0;
     let totSgst = 0;
     let totCgst = 0;
-    let totIgst = 0;
 
     gridRows.forEach((r) => {
-      totQty += r.qty;
-      const lineBase = r.qty * r.saleRate;
-      subTotal += lineBase;
-      totDiscAmt += r.discAmt;
+      totalQty += r.qty;
+      const baseLine = r.qty * r.rateUnit;
+      subTotal += baseLine;
 
-      const taxableLine = lineBase - r.discAmt;
+      const dAmt = (baseLine * r.disPerc) / 100;
+      totDiscAmt += dAmt;
+
+      const taxableLine = baseLine - dAmt;
       totSgst += (taxableLine * r.sgstPerc) / 100;
       totCgst += (taxableLine * r.cgstPerc) / 100;
-      totIgst += (taxableLine * r.igstPerc) / 100;
     });
 
     const totDisc = totDiscAmt + cashDisc + splDisc;
-    const taxableAmt = subTotal - totDisc;
-    const totalTax = totSgst + totCgst + totIgst;
-    const grossVal = taxableAmt + totalTax;
+    const taxableAmt = Math.max(0, subTotal - totDisc);
+    const totalTax = totSgst + totCgst;
+    const grossVal = taxableAmt + totalTax + expensesAmt;
     const roundOff = Math.round(grossVal) - grossVal;
     const grandTotal = Math.round(grossVal);
 
     return {
-      totQty,
+      totalQty,
       subTotal,
       totDiscAmt,
       totDisc,
@@ -379,63 +345,55 @@ export default function RetailSalePOSPage() {
       totalTax,
       totSgst,
       totCgst,
-      totIgst,
       grossVal,
       roundOff,
       grandTotal,
     };
-  }, [gridRows, cashDisc, splDisc]);
+  }, [gridRows, cashDisc, splDisc, expensesAmt]);
 
-  // Open Payment Modal (Step 6)
+  // Open Payment Details Modal (Image 4)
   const handleOpenPaymentModal = () => {
     if (gridRows.length === 0) {
-      alert("Please scan at least one barcode item to create invoice.");
-      return;
-    }
-    if (billType === "CREDIT" && !selectedCustomerId) {
-      alert("Customer selection [F6] is mandatory for Credit Sales.");
+      alert("Please scan at least one saree/product to create POS invoice.");
       return;
     }
 
-    // Auto-fill Cash payment with full grand total as default
-    setPayments({
-      cash: totals.grandTotal,
-      upi: 0,
-      bankTransfer: 0,
-      neft: 0,
-      creditCard: 0,
-      debitCard: 0,
-      others: 0,
-      otherRemarks: "",
-    });
+    // Set default Cash payment equal to Net Total
+    setPaymentRows([
+      { type: "CASH", amount: totals.grandTotal, remarks: "" },
+      { type: "CN/ADVANCE", amount: 0, remarks: "" },
+      { type: "HDFC CARD", amount: 0, remarks: "" },
+      { type: "KOTAK", amount: 0, remarks: "" },
+      { type: "UPI / QR CODE", amount: 0, remarks: "" },
+    ]);
+
     setIsPaymentModalOpen(true);
   };
 
-  // Payment Total Split Sum
-  const totalPaymentSplit = useMemo(() => {
-    return (
-      payments.cash +
-      payments.upi +
-      payments.bankTransfer +
-      payments.neft +
-      payments.creditCard +
-      payments.debitCard +
-      payments.others
-    );
-  }, [payments]);
+  // Payment Rows sum
+  const totalPaidAmount = useMemo(() => {
+    return paymentRows.reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
+  }, [paymentRows]);
 
-  // Save POS Invoice (Step 10)
+  const paymentBalanceRemaining = useMemo(() => {
+    return Math.max(0, totals.grandTotal - totalPaidAmount);
+  }, [totals.grandTotal, totalPaidAmount]);
+
+  const handlePaymentAmountChange = (idx: number, val: number) => {
+    setPaymentRows((prev) => {
+      const updated = [...prev];
+      updated[idx].amount = Math.max(0, val);
+      return updated;
+    });
+  };
+
+  // Confirm & Save POS Invoice (Image 4 Save [F10])
   const handleFinalSaveInvoice = async () => {
     if (!company?.frm_code) return;
 
-    if (billType === "CREDIT" && !selectedCustomerId) {
-      alert("Customer selection [F6] is mandatory for Credit Sales.");
-      return;
-    }
-
-    if (totalPaymentSplit !== totals.grandTotal) {
+    if (totalPaidAmount !== totals.grandTotal) {
       alert(
-        `Payment Split Validation Error:\nTotal Payments (₹${totalPaymentSplit.toLocaleString()}) MUST equal Invoice Grand Total (₹${totals.grandTotal.toLocaleString()}).`
+        `Payment Validation Failed!\nTotal Payment Split (₹${totalPaidAmount.toLocaleString()}) MUST equal Invoice Total (₹${totals.grandTotal.toLocaleString()}).`
       );
       return;
     }
@@ -444,8 +402,8 @@ export default function RetailSalePOSPage() {
     setSaveSuccess(null);
 
     try {
-      // Update bar_temp to set sold_status = 'S' (Sold) to reduce stock immediately
-      const barcodeList = gridRows.map((r) => r.barcodeNo).filter(Boolean);
+      // Update bar_temp to set sold_status = 'S' (Sold)
+      const barcodeList = gridRows.map((r) => r.productCode).filter(Boolean);
       if (barcodeList.length > 0) {
         await supabase
           .from("bar_temp")
@@ -454,7 +412,7 @@ export default function RetailSalePOSPage() {
           .eq("frm_code", company.frm_code);
       }
 
-      const msg = `POS Retail Invoice ${invoiceNo} Saved Successfully!\nGrand Total Paid: ₹${totals.grandTotal.toLocaleString("en-IN")}`;
+      const msg = `Invoice Saved Successfully!\nPOS Bill No #${invoiceNo} for ₹${totals.grandTotal.toLocaleString("en-IN")}`;
       setSaveSuccess(msg);
       alert(msg);
 
@@ -466,30 +424,28 @@ export default function RetailSalePOSPage() {
         handleResetForm();
       }, 3000);
     } catch (e: any) {
-      console.error("Error saving POS invoice:", e);
+      console.error("Save error:", e);
       alert(`Failed to save POS Invoice: ${e.message || e}`);
     } finally {
       setLoading(false);
     }
   };
 
-  // Reset Form (Step 11 - New Button F4)
+  // Reset Form (Image 2 New [F4])
   const handleResetForm = () => {
     setMode("add");
     setCurrentIndex(-1);
-    setSelectedCustomerId("");
-    setSelectedCustomerObj(null);
-    setCustomerMobile("");
-    setCustomerBalance(0);
     setGridRows([]);
     setCashDisc(0);
     setSplDisc(0);
+    setExpensesAmt(0);
+    setRemarks("");
     setScanInput("");
     fetchInitialData();
     setTimeout(() => scanInputRef.current?.focus(), 100);
   };
 
-  // Keyboard Shortcuts (Step 18)
+  // Keyboard Shortcuts Listener
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Insert") {
@@ -501,251 +457,193 @@ export default function RetailSalePOSPage() {
       } else if (e.key === "F4") {
         e.preventDefault();
         handleResetForm();
+      } else if (e.key === "F5") {
+        e.preventDefault();
+        if (isStockModalOpen && stockItems[selectedStockRowIndex]) {
+          addStockItemToGrid(stockItems[selectedStockRowIndex]);
+          setIsStockModalOpen(false);
+        } else {
+          setIsStockModalOpen(true);
+        }
       } else if (e.key === "F6") {
         e.preventDefault();
-        const selectElem = document.getElementById("pos-customer-select");
-        selectElem?.focus();
-      } else if (e.key === "F8") {
+        const custElem = document.getElementById("pos-cust-mobile");
+        custElem?.focus();
+      } else if (e.key === "F10") {
         e.preventDefault();
-        setIsStockModalOpen(true);
-      } else if (e.key === "F10" || (e.ctrlKey && e.key.toLowerCase() === "p")) {
-        e.preventDefault();
-        handleOpenPaymentModal();
+        if (isPaymentModalOpen) {
+          handleFinalSaveInvoice();
+        } else {
+          handleOpenPaymentModal();
+        }
       }
     };
-
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [gridRows, totals.grandTotal, billType, selectedCustomerId]);
+  }, [gridRows, totals.grandTotal, isPaymentModalOpen, isStockModalOpen, stockItems, selectedStockRowIndex]);
 
   return (
-    <div className="min-h-screen bg-slate-100 dark:bg-slate-900 p-2 space-y-2 font-sans text-xs">
-      {/* Step 1: Top POS Sales Banner Header */}
-      <div className="bg-amber-600 text-white px-3 py-2 rounded shadow flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-3">
-          <ShoppingBag className="h-5 w-5" />
-          <div>
-            <h1 className="text-base font-bold tracking-tight">Retail Sale (POS)</h1>
-            <p className="text-[11px] text-amber-100">Fast Barcode Billing & Multiple Split Payment Collection</p>
+    <div className="min-h-screen bg-slate-200 dark:bg-slate-900 p-1.5 space-y-1.5 font-sans text-xs">
+      {/* Top POS Header Bar (Image 2) */}
+      <div className="bg-lime-600 text-white px-3 py-1.5 rounded flex items-center justify-between shadow-sm">
+        <div className="flex items-center gap-2">
+          <div className="bg-white text-lime-700 rounded-full w-6 h-6 flex items-center justify-center font-black text-sm">
+            ➔
           </div>
-          <span className="bg-amber-800 text-amber-100 px-2 py-0.5 rounded text-[11px] font-bold uppercase">
-            {mode === "add" ? "New Bill Mode" : "Edit Mode"}
+          <h1 className="text-base font-black tracking-tight">POS</h1>
+          <span className="text-xs font-bold text-lime-100 pl-2">
+            {mode === "add" ? "Add New Mode" : "Edit Mode"}
           </span>
         </div>
 
-        {/* Counter Info Badges */}
-        <div className="flex items-center gap-4 text-[11px] font-mono">
-          <span className="bg-amber-700 px-2 py-0.5 rounded font-bold">
-            Invoice: <span className="text-amber-200">{invoiceNo}</span>
-          </span>
-          <span className="bg-amber-700 px-2 py-0.5 rounded">
-            Date: {invoiceDate}
-          </span>
-          <span className="bg-amber-700 px-2 py-0.5 rounded">
-            User: {userName}
-          </span>
-          <span className="bg-amber-700 px-2 py-0.5 rounded">
-            Counter: {counterName}
-          </span>
-          <span className="bg-amber-700 px-2 py-0.5 rounded">
-            Shift: {shiftName}
-          </span>
+        <div className="text-xs font-mono font-bold text-lime-100 flex items-center gap-4">
+          <span>Counter: Counter 1</span>
+          <span>Shift: General Shift</span>
         </div>
       </div>
 
       {/* PROMINENT RECORD SAVED CONFIRMATION BANNER */}
       {saveSuccess && (
-        <div className="bg-emerald-600 text-white px-4 py-3 rounded-md font-bold text-sm flex items-center gap-2 shadow-md animate-bounce">
-          <CheckCircle2 className="h-5 w-5" />
+        <div className="bg-emerald-600 text-white px-4 py-2 rounded font-bold text-xs flex items-center gap-2 shadow animate-bounce">
+          <CheckCircle2 className="h-4 w-4" />
           <span>{saveSuccess}</span>
         </div>
       )}
 
-      {/* STEP 2: BARCODE SCAN BOX & CUSTOMER SELECTION BAR */}
-      <Card className="shadow-sm border-2 border-amber-500 bg-amber-50/50 dark:bg-slate-800">
-        <CardContent className="p-3 space-y-2">
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-3 items-center">
-            {/* Step 2: Barcode / Batch Scan Box (Primary Focus) */}
-            <div className="md:col-span-2">
-              <Label className="text-xs font-black text-amber-900 dark:text-amber-300 flex items-center gap-1 uppercase tracking-wide">
-                <Barcode className="h-4 w-4 text-amber-600" />
-                Scan Barcode / Batch No [F3 / Insert] *
-              </Label>
-              <div className="flex gap-2 mt-1">
-                <Input
-                  ref={scanInputRef}
-                  value={scanInput}
-                  onChange={(e) => setScanInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") handleScanBarcode();
-                  }}
-                  placeholder="Scan Saree Barcode (e.g. KS02369) or Batch No..."
-                  className={`h-9 text-sm bg-white text-slate-900 font-mono font-bold border-2 border-amber-400 ${focusHighlightClass}`}
-                />
-                <Button
-                  size="sm"
-                  className="h-9 bg-slate-900 text-white font-bold px-4 hover:bg-slate-800"
-                  onClick={() => handleScanBarcode()}
-                >
-                  Scan
-                </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="h-9 text-xs font-bold border-amber-400 text-amber-900"
-                  onClick={() => setIsStockModalOpen(true)}
-                >
-                  Stock List [F8]
-                </Button>
-              </div>
-            </div>
+      {/* Step 1 & 2: Top Scan Input Bar & Stock Indicator (Image 2) */}
+      <div className="bg-slate-100 dark:bg-slate-800 p-2 rounded border border-slate-300 dark:border-slate-700 space-y-1">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="w-24">
+            <Label className="text-[11px] font-bold text-slate-700 dark:text-slate-300">
+              Type [F2]
+            </Label>
+            <select
+              value={saleType}
+              onChange={(e) => setSaleType(e.target.value)}
+              className="flex h-7 w-full rounded border border-input bg-background px-2 text-xs font-bold"
+            >
+              <option value="SALES">SALES</option>
+              <option value="RETURN">RETURN</option>
+            </select>
+          </div>
 
-            {/* Step 5: Customer Selection (F6) */}
-            <div>
-              <Label className="text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1">
-                <User className="h-3.5 w-3.5 text-amber-600" />
-                Customer Selection [F6]
-              </Label>
-              <select
-                id="pos-customer-select"
-                value={selectedCustomerId}
-                onChange={(e) => handleCustomerSelect(e.target.value)}
-                className={`flex h-9 w-full rounded-md border border-input bg-background px-3 text-xs font-bold mt-1 ${focusHighlightClass}`}
+          <div className="flex-1 min-w-[280px]">
+            <Label className="text-[11px] font-bold text-slate-700 dark:text-slate-300">
+              Product Code [Insert] *
+            </Label>
+            <div className="flex gap-1">
+              <Input
+                ref={scanInputRef}
+                value={scanInput}
+                onChange={(e) => setScanInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleScanProductCode();
+                }}
+                placeholder="Scan Saree Barcode (e.g. RS00002) or Product Code..."
+                className={`h-7 text-xs bg-white text-slate-900 font-mono font-bold border border-slate-400 ${focusHighlightClass}`}
+              />
+              <Button
+                size="sm"
+                className="h-7 text-xs bg-slate-200 text-slate-800 border hover:bg-slate-300 font-bold px-3"
+                onClick={() => setIsStockModalOpen(true)}
               >
-                <option value="">-- Cash Retail Customer --</option>
-                {customers.map((c) => (
-                  <option key={c.ledg_code} value={c.ledg_code}>
-                    {c.ledg_name} {c.ph_no ? `(${c.ph_no})` : ""}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {/* Bill Type Dropdown */}
-            <div>
-              <Label className="text-xs font-bold text-slate-700 dark:text-slate-300">
-                Bill Type
-              </Label>
-              <select
-                value={billType}
-                onChange={(e) => setBillType(e.target.value)}
-                className={`flex h-9 w-full rounded-md border border-input bg-background px-3 text-xs font-bold mt-1 ${focusHighlightClass}`}
+                Select [F5]
+              </Button>
+              <Button
+                size="sm"
+                className="h-7 text-xs bg-slate-200 text-slate-800 border hover:bg-slate-300 font-bold px-3"
+                onClick={() => setIsStockModalOpen(true)}
               >
-                <option value="CASH">CASH SALE</option>
-                <option value="CREDIT">CREDIT SALE (F6 Required)</option>
-                <option value="CARD_UPI">CARD / UPI / DIGITAL</option>
-              </select>
+                Search [F3]
+              </Button>
             </div>
           </div>
-        </CardContent>
-      </Card>
+        </div>
 
-      {/* STEP 3 & 4: MAIN POS INVOICE GRID TABLE & SIDE PAYMENTS SUMMARY */}
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-2">
-        {/* Main Invoice Grid */}
-        <div className="lg:col-span-3 space-y-2">
+        {/* Stock Banner Summary Line (Image 2: C-Rate: T.TT, S-Rate: T.TT : Stock : 10 PCS) */}
+        <div className="bg-sky-50 dark:bg-sky-950/60 border border-sky-200 text-sky-800 dark:text-sky-200 px-3 py-1 rounded text-[11px] font-mono font-bold flex justify-between">
+          <span>{stockBannerText}</span>
+          <span>Shift+F7: Change Product Name</span>
+        </div>
+      </div>
+
+      {/* STEP 3 & MAIN LAYOUT: GRID TABLE (LEFT 3 COLS) & VOUCHER DETAILS PANEL (RIGHT 1 COL) */}
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-1.5">
+        {/* Main Grid Table (Image 2) */}
+        <div className="lg:col-span-3 space-y-1.5">
           <Card className="shadow-sm border overflow-hidden">
-            <div className="p-2 bg-slate-800 text-white font-bold flex justify-between items-center text-xs">
-              <span>POS BILLING ITEMS GRID</span>
-              <span>Total Items: {gridRows.length}</span>
-            </div>
-
-            <div className="overflow-x-auto min-h-[320px] max-h-[460px]">
+            <div className="overflow-x-auto min-h-[340px] max-h-[480px]">
               <Table className="w-full border-collapse text-xs">
-                <TableHeader className="bg-slate-200 dark:bg-slate-800 text-xs font-bold sticky top-0 z-10">
+                <TableHeader className="bg-slate-100 dark:bg-slate-800 text-[11px] font-bold border-b border-slate-300">
                   <TableRow>
-                    <TableHead className="w-8 text-center p-1 text-red-600 font-bold">Del</TableHead>
-                    <TableHead className="w-10 text-center p-1 font-bold">SNo</TableHead>
-                    <TableHead className="w-28 p-1 font-bold">Barcode No</TableHead>
-                    <TableHead className="w-28 p-1 font-bold">Batch No</TableHead>
-                    <TableHead className="min-w-[160px] p-1 font-bold">Product Name</TableHead>
-                    <TableHead className="w-16 text-right p-1 font-bold">Qty</TableHead>
-                    <TableHead className="w-14 text-center p-1 font-bold">Unit</TableHead>
-                    <TableHead className="w-20 text-right p-1 font-bold">Sale Rate</TableHead>
+                    <TableHead className="w-6 text-center p-1 text-red-600 font-bold">Del</TableHead>
+                    <TableHead className="w-8 text-center p-1 font-bold">S...</TableHead>
+                    <TableHead className="w-24 p-1 font-bold">Product Code</TableHead>
+                    <TableHead className="min-w-[180px] p-1 font-bold">Product Name [Shift+F7]</TableHead>
+                    <TableHead className="w-12 text-right p-1 font-bold">Qty</TableHead>
+                    <TableHead className="w-16 p-1 font-bold">Unit Name</TableHead>
+                    <TableHead className="w-12 text-right p-1 font-bold">Unit</TableHead>
+                    <TableHead className="w-14 text-right p-1 font-bold">Gross</TableHead>
+                    <TableHead className="w-20 text-right p-1 font-bold">Rate/Unit</TableHead>
                     <TableHead className="w-20 text-right p-1 font-bold">Amount</TableHead>
-                    <TableHead className="w-14 text-right p-1 font-bold">Dis%</TableHead>
-                    <TableHead className="w-16 text-right p-1 font-bold">DisAmt</TableHead>
-                    <TableHead className="w-14 text-right p-1 font-bold">GST%</TableHead>
-                    <TableHead className="w-24 text-right p-1 font-bold">Net Total</TableHead>
+                    <TableHead className="w-12 text-right p-1 font-bold">Dis %</TableHead>
+                    <TableHead className="w-12 text-right p-1 font-bold">SGST</TableHead>
+                    <TableHead className="w-12 text-right p-1 font-bold">CGST</TableHead>
                   </TableRow>
                 </TableHeader>
 
                 <TableBody className="text-xs font-mono">
                   {gridRows.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={13} className="text-center p-12 text-slate-500 font-bold space-y-2">
-                        <Barcode className="h-10 w-10 text-amber-500 mx-auto" />
-                        <p className="text-sm">Scan barcode above to add items automatically to bill.</p>
+                      <TableCell colSpan={13} className="text-center p-12 text-slate-400 font-bold">
+                        Scan Saree Barcode or Product Code above to add to invoice.
                       </TableCell>
                     </TableRow>
                   ) : (
                     gridRows.map((row, idx) => (
-                      <TableRow key={row.id} className="hover:bg-amber-50/50 transition-colors">
+                      <TableRow key={row.id} className="hover:bg-amber-100/60 transition-colors">
                         <TableCell className="text-center p-1">
                           <button
                             onClick={() => handleDeleteRow(idx)}
                             className="text-red-600 hover:text-red-800 font-black p-0.5"
                           >
-                            <X className="h-4 w-4" />
+                            ✕
                           </button>
                         </TableCell>
                         <TableCell className="text-center p-1 font-bold text-slate-500">
                           {row.sno}
                         </TableCell>
-                        <TableCell className="p-1 font-bold text-amber-700 dark:text-amber-400">
-                          {row.barcodeNo}
-                        </TableCell>
-                        <TableCell className="p-1 font-medium text-slate-700">
-                          {row.batchNo}
+                        <TableCell className="p-1 font-bold text-amber-800 dark:text-amber-300">
+                          {row.productCode}
                         </TableCell>
                         <TableCell className="p-1 font-bold text-slate-800 dark:text-slate-100">
-                          {row.prname}
+                          {row.productName}
                         </TableCell>
                         <TableCell className="p-1">
                           <Input
                             type="number"
-                            readOnly={!row.isBatchItem}
                             value={row.qty}
                             onChange={(e) => handleCellChange(idx, "qty", e.target.value)}
-                            className={`h-7 text-xs text-right bg-background font-bold ${focusHighlightClass}`}
+                            className={`h-6 text-xs text-right bg-background font-bold ${focusHighlightClass}`}
                           />
                         </TableCell>
-                        <TableCell className="p-1 text-center font-bold text-slate-700">
-                          {row.unit}
-                        </TableCell>
-                        <TableCell className="p-1">
-                          <Input
-                            type="number"
-                            value={row.saleRate}
-                            onChange={(e) => handleCellChange(idx, "saleRate", e.target.value)}
-                            className={`h-7 text-xs text-right bg-background ${focusHighlightClass}`}
-                          />
-                        </TableCell>
+                        <TableCell className="p-1 font-medium">{row.unitName}</TableCell>
+                        <TableCell className="p-1 text-right">{row.unit}</TableCell>
+                        <TableCell className="p-1 text-right">{row.gross.toFixed(3)}</TableCell>
                         <TableCell className="p-1 text-right font-bold">
-                          ₹{row.amount.toFixed(2)}
-                        </TableCell>
-                        <TableCell className="p-1">
                           <Input
                             type="number"
-                            value={row.disPerc}
-                            onChange={(e) => handleCellChange(idx, "disPerc", e.target.value)}
-                            className={`h-7 text-xs text-right bg-background ${focusHighlightClass}`}
+                            value={row.rateUnit}
+                            onChange={(e) => handleCellChange(idx, "rateUnit", e.target.value)}
+                            className={`h-6 text-xs text-right bg-background font-bold ${focusHighlightClass}`}
                           />
                         </TableCell>
-                        <TableCell className="p-1">
-                          <Input
-                            type="number"
-                            value={row.discAmt}
-                            onChange={(e) => handleCellChange(idx, "discAmt", e.target.value)}
-                            className={`h-7 text-xs text-right bg-background ${focusHighlightClass}`}
-                          />
+                        <TableCell className="p-1 text-right font-bold text-slate-900 dark:text-white">
+                          {row.amount.toFixed(2)}
                         </TableCell>
-                        <TableCell className="p-1 text-right font-bold text-slate-600">
-                          {row.sgstPerc + row.cgstPerc + row.igstPerc}%
-                        </TableCell>
-                        <TableCell className="p-1 text-right font-bold text-emerald-700">
-                          ₹{row.netAmount.toFixed(2)}
-                        </TableCell>
+                        <TableCell className="p-1 text-right">{row.disPerc}</TableCell>
+                        <TableCell className="p-1 text-right">{row.sgstPerc}</TableCell>
+                        <TableCell className="p-1 text-right">{row.cgstPerc}</TableCell>
                       </TableRow>
                     ))
                   )}
@@ -753,305 +651,441 @@ export default function RetailSalePOSPage() {
               </Table>
             </div>
 
-            <div className="bg-slate-200 dark:bg-slate-800 p-2 flex items-center justify-between font-bold text-xs border-t">
-              <span className="text-slate-600">Total Scanned Items: {gridRows.length}</span>
-              <div className="flex gap-6 font-mono text-xs">
-                <span>
-                  Total Qty: <span className="bg-white px-2 py-0.5 rounded text-slate-900 font-bold">{totals.totQty}</span>
-                </span>
-                <span>
-                  Sub Total: <span className="bg-white px-2 py-0.5 rounded text-slate-900 font-bold">₹{totals.subTotal.toFixed(2)}</span>
-                </span>
-                <span>
-                  Total Tax: <span className="bg-white px-2 py-0.5 rounded text-amber-700 font-bold">₹{totals.totalTax.toFixed(2)}</span>
+            {/* Grid Summary Footer Line (Image 2) */}
+            <div className="bg-slate-100 dark:bg-slate-800 p-1.5 flex items-center justify-between font-mono font-bold text-xs border-t">
+              <span className="w-8 text-center">{gridRows.length}</span>
+              <div className="flex gap-12 text-right">
+                <span className="w-16">{totals.totalQty.toFixed(2)}</span>
+                <span className="w-16">{totals.totalQty.toFixed(3)}</span>
+                <span className="w-24 text-slate-900 dark:text-white">
+                  {totals.subTotal.toFixed(2)}
                 </span>
               </div>
             </div>
           </Card>
         </div>
 
-        {/* Right Side POS Totals & Big Pay Banner */}
-        <div className="lg:col-span-1 space-y-2">
-          <Card className="shadow-sm border">
-            <div className="bg-slate-800 text-white px-3 py-1.5 font-bold flex justify-between items-center text-xs">
-              <span>POS Invoice Summary</span>
-              <span className="text-[10px] bg-amber-600 px-1.5 py-0.5 rounded">
-                {new Date().toLocaleTimeString()}
-              </span>
+        {/* Right Side Voucher Details Panel (Image 2) */}
+        <div className="lg:col-span-1 space-y-1.5">
+          <Card className="shadow-sm border bg-slate-50 dark:bg-slate-800">
+            <div className="bg-slate-200 dark:bg-slate-700 px-2 py-1 font-bold text-[11px] text-slate-800 dark:text-slate-100 flex justify-between">
+              <span>Voucher Details [F7]</span>
             </div>
 
-            <CardContent className="p-2 space-y-2 text-xs">
+            <CardContent className="p-2 space-y-1.5 text-xs font-sans">
+              <div className="flex justify-between items-center">
+                <span className="font-bold text-slate-600">Invoice No</span>
+                <div className="flex gap-1 items-center font-mono font-bold">
+                  <Input
+                    readOnly
+                    value={invoiceNo}
+                    className="h-6 text-xs text-right w-16 bg-white"
+                  />
+                  <span className="text-[10px] text-slate-500">{invoiceTime}</span>
+                </div>
+              </div>
+
+              <div className="flex justify-between items-center">
+                <span className="font-bold text-slate-600">Date (Thu)</span>
+                <Input
+                  type="date"
+                  value={invoiceDate}
+                  onChange={(e) => setInvoiceDate(e.target.value)}
+                  className="h-6 text-xs font-mono text-right w-28 bg-white"
+                />
+              </div>
+
+              <div className="flex justify-between items-center">
+                <span className="font-bold text-slate-600">Salesman[F7]</span>
+                <Input
+                  value={salesman}
+                  onChange={(e) => setSalesman(e.target.value)}
+                  className="h-6 text-xs text-right w-28 bg-white"
+                />
+              </div>
+
+              <hr className="my-1 border-slate-300" />
+
               <div className="space-y-1 font-mono text-xs">
                 <div className="flex justify-between items-center">
-                  <span className="text-slate-600">SubTotal:</span>
-                  <span className="font-bold">₹{totals.subTotal.toFixed(2)}</span>
+                  <span className="text-slate-600">SubTotal</span>
+                  <span className="font-bold">{totals.subTotal.toFixed(2)}</span>
                 </div>
 
                 <div className="flex justify-between items-center">
-                  <span className="text-slate-600">Cash Disc.:</span>
+                  <span className="text-slate-600">Cash Disc.</span>
                   <Input
                     type="number"
                     value={cashDisc}
                     onChange={(e) => setCashDisc(Number(e.target.value) || 0)}
-                    className="h-6 text-xs text-right w-24 font-mono"
+                    className="h-5 text-xs text-right w-20 bg-white"
                   />
                 </div>
 
                 <div className="flex justify-between items-center font-bold">
-                  <span>Total Disc.:</span>
-                  <span className="text-red-600">₹{totals.totDisc.toFixed(2)}</span>
+                  <span>Total Disc.</span>
+                  <span className="text-red-600">{totals.totDisc.toFixed(2)}</span>
                 </div>
 
                 <div className="flex justify-between items-center font-bold">
-                  <span>Taxable Amt.:</span>
-                  <span>₹{totals.taxableAmt.toFixed(2)}</span>
+                  <span>Taxable Amt.</span>
+                  <span>{totals.taxableAmt.toFixed(2)}</span>
                 </div>
 
                 <div className="flex justify-between items-center font-bold">
-                  <span>Total Tax:</span>
-                  <span className="text-amber-700">₹{totals.totalTax.toFixed(2)}</span>
+                  <span>Total Tax</span>
+                  <span className="text-amber-700">{totals.totalTax.toFixed(2)}</span>
+                </div>
+
+                <div className="pt-1 border-t border-slate-200">
+                  <span className="text-[11px] font-bold text-slate-600 block">
+                    Other Charges / Expenses A/c
+                  </span>
+                  <div className="flex justify-end mt-0.5">
+                    <Input
+                      type="number"
+                      value={expensesAmt}
+                      onChange={(e) => setExpensesAmt(Number(e.target.value) || 0)}
+                      className="h-5 text-xs text-right w-24 bg-white"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex justify-between items-center font-bold pt-1">
+                  <span>Total Value</span>
+                  <span>{totals.grossVal.toFixed(2)}</span>
                 </div>
 
                 <div className="flex justify-between items-center text-slate-500">
-                  <span>Round Off:</span>
-                  <span>₹{totals.roundOff.toFixed(2)}</span>
+                  <span>Round Off</span>
+                  <span>{totals.roundOff.toFixed(2)}</span>
                 </div>
               </div>
 
-              {/* BIG GOLDEN NET PAYABLE BANNER */}
-              <div className="bg-amber-500 text-white rounded p-3 text-center border-2 border-amber-600 shadow space-y-1">
-                <span className="text-[10px] font-bold tracking-widest uppercase block text-amber-100">
-                  TOTAL NET PAYABLE
+              <div>
+                <span className="text-[11px] font-bold text-slate-600">Remarks</span>
+                <Input
+                  value={remarks}
+                  onChange={(e) => setRemarks(e.target.value)}
+                  className="h-6 text-xs bg-white mt-0.5"
+                />
+              </div>
+
+              {/* BIG BRIGHT GREEN NET TOTAL DISPLAY BOX (Image 2) */}
+              <div className="bg-lime-500 text-slate-950 p-2 rounded text-right border-2 border-lime-600 shadow-inner mt-2">
+                <span className="text-2xl font-black font-mono tracking-tight">
+                  {totals.grandTotal.toFixed(2)}
                 </span>
-                <span className="text-2xl font-black font-mono">
-                  ₹{totals.grandTotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}
-                </span>
-                <Button
-                  size="sm"
-                  className="w-full mt-2 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs shadow"
-                  onClick={handleOpenPaymentModal}
-                >
-                  Collect Payment [F10 / Ctrl+P]
-                </Button>
               </div>
             </CardContent>
           </Card>
         </div>
       </div>
 
-      {/* Bottom Action Controls Toolbar */}
-      <div className="bg-card border rounded p-2 flex flex-wrap items-center justify-between gap-2 shadow-sm">
-        <div className="flex flex-wrap items-center gap-2">
+      {/* BOTTOM CUSTOMER DETAILS BAR (Image 2) */}
+      <div className="bg-slate-100 dark:bg-slate-800 p-1.5 rounded border flex flex-wrap items-center justify-between gap-2 text-xs font-sans">
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex items-center gap-1">
+            <span className="font-bold text-slate-600">Mobile [F6]</span>
+            <Input
+              id="pos-cust-mobile"
+              value={customerMobile}
+              onChange={(e) => setCustomerMobile(e.target.value)}
+              className="h-6 text-xs w-28 bg-white"
+            />
+          </div>
+
+          <div className="flex items-center gap-1">
+            <span className="font-bold text-slate-600">Customer [F6]</span>
+            <Input
+              value={customerName}
+              onChange={(e) => setCustomerName(e.target.value)}
+              className="h-6 text-xs w-28 bg-white font-bold"
+            />
+          </div>
+
+          <div className="flex items-center gap-1">
+            <span className="font-bold text-slate-600">E-Mail ID</span>
+            <Input
+              value={customerEmail}
+              onChange={(e) => setCustomerEmail(e.target.value)}
+              className="h-6 text-xs w-36 bg-white"
+            />
+          </div>
+
+          <div className="flex items-center gap-1 font-mono">
+            <span className="font-bold text-slate-600">A/c Balance</span>
+            <span className="bg-white border px-2 py-0.5 rounded font-bold">
+              {customerBalance.toFixed(2)} Cr
+            </span>
+          </div>
+
           <Button
             size="sm"
-            variant="outline"
-            className="h-8 text-xs font-bold"
+            className="h-6 text-xs bg-slate-200 text-slate-800 border hover:bg-slate-300 font-bold px-2"
+          >
+            Save [F5]
+          </Button>
+        </div>
+
+        <div className="flex items-center gap-4 font-mono font-bold text-slate-600">
+          <span>Tendered: 0.00</span>
+          <span>Refund: 0.00</span>
+        </div>
+      </div>
+
+      {/* BOTTOM ACTION BUTTONS TOOLBAR (Image 2) */}
+      <div className="bg-white dark:bg-slate-800 p-1.5 rounded border flex flex-wrap items-center justify-between gap-2 shadow-sm">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <Button
+            size="sm"
+            className="h-7 text-xs bg-slate-200 text-slate-900 hover:bg-slate-300 font-bold border"
+            onClick={handleOpenPaymentModal}
+          >
+            Save [F10]
+          </Button>
+          <Button
+            size="sm"
+            className="h-7 text-xs bg-slate-200 text-slate-900 hover:bg-slate-300 font-bold border"
             onClick={handleResetForm}
           >
             New [F4]
           </Button>
-
           <Button
             size="sm"
-            variant="outline"
-            className="h-8 text-xs font-bold border-amber-400 text-amber-900"
-            onClick={() => setIsStockModalOpen(true)}
-          >
-            Stock List [F8]
-          </Button>
-
-          <Button
-            size="sm"
-            className="h-8 text-xs bg-amber-600 hover:bg-amber-700 text-white font-bold px-4 shadow"
+            className="h-7 text-xs bg-slate-200 text-slate-900 hover:bg-slate-300 font-bold border"
             onClick={handleOpenPaymentModal}
-            disabled={loading}
           >
-            Save Invoice [F10]
+            Payment Details
           </Button>
-
           <Button
             size="sm"
-            variant="outline"
-            className="h-8 text-xs text-red-600 font-bold"
-            onClick={handleResetForm}
+            className="h-7 text-xs bg-slate-200 text-slate-900 hover:bg-slate-300 font-bold border"
           >
-            Cancel
+            Other Details
+          </Button>
+          <Button
+            size="sm"
+            className="h-7 text-xs bg-slate-200 text-slate-900 hover:bg-slate-300 font-bold border"
+          >
+            Options ▾
+          </Button>
+        </div>
+
+        <div className="flex items-center gap-1.5 font-bold">
+          <Button
+            size="sm"
+            className="h-7 text-xs bg-slate-200 text-slate-900 hover:bg-slate-300 border"
+          >
+            Previous [Pg Up]
+          </Button>
+          <Button
+            size="sm"
+            className="h-7 text-xs bg-slate-200 text-slate-900 hover:bg-slate-300 border"
+          >
+            Next [Pg Down]
           </Button>
         </div>
       </div>
 
-      {/* STEP 6 & 8: PAYMENT COLLECTION & SPLIT RECEIPT MODAL (F10 / Ctrl+P) */}
-      <Dialog open={isPaymentModalOpen} onOpenChange={setIsPaymentModalOpen}>
-        <DialogContent className="max-w-xl">
-          <DialogHeader className="bg-amber-600 text-white p-3 rounded-t-lg">
-            <DialogTitle className="text-base font-bold flex items-center justify-between">
-              <span className="flex items-center gap-2">
-                <CreditCard className="h-5 w-5" />
-                Payment Collection & Split Receipt Window
-              </span>
-              <span className="text-xs bg-amber-800 px-2 py-0.5 rounded font-mono">
-                Bill Net Total: ₹{totals.grandTotal.toLocaleString("en-IN")}
-              </span>
-            </DialogTitle>
-          </DialogHeader>
-
-          <div className="p-3 space-y-3 font-sans text-xs">
-            <p className="text-slate-500 font-medium">
-              Specify split payment amounts across collection modes. Total split payments MUST equal <strong>₹{totals.grandTotal.toLocaleString("en-IN")}</strong>:
-            </p>
-
-            <div className="grid grid-cols-2 gap-3 bg-slate-50 dark:bg-slate-900 p-3 rounded-md border font-mono">
-              <div>
-                <Label className="text-xs font-bold text-slate-700 dark:text-slate-300">Cash Received</Label>
-                <Input
-                  type="number"
-                  value={payments.cash}
-                  onChange={(e) => setPayments({ ...payments, cash: Number(e.target.value) || 0 })}
-                  className={`h-8 text-xs font-bold ${focusHighlightClass}`}
-                />
-              </div>
-
-              <div>
-                <Label className="text-xs font-bold text-slate-700 dark:text-slate-300">UPI / QR Code</Label>
-                <Input
-                  type="number"
-                  value={payments.upi}
-                  onChange={(e) => setPayments({ ...payments, upi: Number(e.target.value) || 0 })}
-                  className={`h-8 text-xs font-bold ${focusHighlightClass}`}
-                />
-              </div>
-
-              <div>
-                <Label className="text-xs font-bold text-slate-700 dark:text-slate-300">Bank Transfer</Label>
-                <Input
-                  type="number"
-                  value={payments.bankTransfer}
-                  onChange={(e) => setPayments({ ...payments, bankTransfer: Number(e.target.value) || 0 })}
-                  className={`h-8 text-xs font-bold ${focusHighlightClass}`}
-                />
-              </div>
-
-              <div>
-                <Label className="text-xs font-bold text-slate-700 dark:text-slate-300">NEFT / RTGS</Label>
-                <Input
-                  type="number"
-                  value={payments.neft}
-                  onChange={(e) => setPayments({ ...payments, neft: Number(e.target.value) || 0 })}
-                  className={`h-8 text-xs font-bold ${focusHighlightClass}`}
-                />
-              </div>
-
-              <div>
-                <Label className="text-xs font-bold text-slate-700 dark:text-slate-300">Credit Card</Label>
-                <Input
-                  type="number"
-                  value={payments.creditCard}
-                  onChange={(e) => setPayments({ ...payments, creditCard: Number(e.target.value) || 0 })}
-                  className={`h-8 text-xs font-bold ${focusHighlightClass}`}
-                />
-              </div>
-
-              <div>
-                <Label className="text-xs font-bold text-slate-700 dark:text-slate-300">Debit Card</Label>
-                <Input
-                  type="number"
-                  value={payments.debitCard}
-                  onChange={(e) => setPayments({ ...payments, debitCard: Number(e.target.value) || 0 })}
-                  className={`h-8 text-xs font-bold ${focusHighlightClass}`}
-                />
-              </div>
-            </div>
-
-            {/* Split Payment Validation Total Bar */}
-            <div className={`p-2.5 rounded-md font-mono font-bold flex justify-between items-center text-xs ${
-              totalPaymentSplit === totals.grandTotal
-                ? "bg-emerald-100 text-emerald-900 border border-emerald-300"
-                : "bg-rose-100 text-rose-900 border border-rose-300"
-            }`}>
-              <span>Total Split Payment Collected:</span>
-              <span className="text-sm">₹{totalPaymentSplit.toLocaleString("en-IN")} / ₹{totals.grandTotal.toLocaleString("en-IN")}</span>
-            </div>
+      {/* IMAGE 3: STOCK SELECTION POPUP MODAL (Stock : DESIGNER SAREE) */}
+      <Dialog open={isStockModalOpen} onOpenChange={setIsStockModalOpen}>
+        <DialogContent className="max-w-4xl max-h-[85vh] p-0 border">
+          <div className="bg-slate-300 dark:bg-slate-700 px-3 py-1.5 font-bold text-xs border-b text-slate-900 dark:text-slate-100 flex justify-between">
+            <span>Stock : DESIGNER SAREE</span>
+            <button
+              onClick={() => setIsStockModalOpen(false)}
+              className="text-slate-600 hover:text-slate-900"
+            >
+              ✕
+            </button>
           </div>
 
-          <DialogFooter className="bg-slate-100 p-3 rounded-b-lg flex justify-between">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setIsPaymentModalOpen(false)}
-            >
-              Cancel
-            </Button>
-            <Button
-              size="sm"
-              className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-6"
-              onClick={handleFinalSaveInvoice}
-              disabled={loading || totalPaymentSplit !== totals.grandTotal}
-            >
-              {loading ? "Processing..." : "Confirm & Save POS Invoice [F10]"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* STOCK LIST & SELECTION POPUP MODAL (F8) */}
-      <Dialog open={isStockModalOpen} onOpenChange={setIsStockModalOpen}>
-        <DialogContent className="max-w-3xl">
-          <DialogHeader className="bg-slate-800 text-white p-3 rounded-t-lg">
-            <DialogTitle className="text-base font-bold flex items-center justify-between">
-              <span>Available Stock Selection Window [F8]</span>
-              <Input
-                value={stockSearchQuery}
-                onChange={(e) => setStockSearchQuery(e.target.value)}
-                placeholder="Search Stock..."
-                className="h-7 text-xs w-48 bg-white text-slate-900"
-              />
-            </DialogTitle>
-          </DialogHeader>
-
-          <div className="p-2 max-h-[400px] overflow-y-auto">
-            <Table className="w-full text-xs border">
-              <TableHeader className="bg-slate-200 font-bold">
+          <div className="p-2 overflow-y-auto max-h-[420px]">
+            <Table className="w-full text-xs border-collapse font-mono">
+              <TableHeader className="bg-slate-100 font-bold text-[11px] border-b">
                 <TableRow>
-                  <TableHead className="font-bold">Barcode</TableHead>
-                  <TableHead className="font-bold">Batch No</TableHead>
-                  <TableHead className="font-bold">Product Name</TableHead>
-                  <TableHead className="text-right font-bold">Pur. Rate</TableHead>
-                  <TableHead className="text-right font-bold">Sale Rate</TableHead>
-                  <TableHead className="text-center font-bold">Action</TableHead>
+                  <TableHead className="w-8 text-center p-1 font-bold">SNo</TableHead>
+                  <TableHead className="w-24 p-1 font-bold">Batch Name</TableHead>
+                  <TableHead className="w-12 text-right p-1 font-bold">Stock</TableHead>
+                  <TableHead className="w-16 text-right p-1 font-bold">P.Rate</TableHead>
+                  <TableHead className="w-16 text-right p-1 font-bold">Cost Rate</TableHead>
+                  <TableHead className="w-16 text-right p-1 font-bold">MarkUp</TableHead>
+                  <TableHead className="w-16 text-right p-1 font-bold">Sale Rate</TableHead>
+                  <TableHead className="w-14 p-1 font-bold">Design</TableHead>
+                  <TableHead className="w-16 text-right p-1 font-bold">Purchase Qty</TableHead>
+                  <TableHead className="w-20 p-1 font-bold">Date</TableHead>
+                  <TableHead className="w-14 p-1 font-bold">Doc No</TableHead>
+                  <TableHead className="p-1 font-bold">Account Name</TableHead>
                 </TableRow>
               </TableHeader>
 
-              <TableBody className="font-mono text-xs">
-                {availableStockItems
-                  .filter((b) =>
-                    stockSearchQuery
-                      ? b.bar_no?.toLowerCase().includes(stockSearchQuery.toLowerCase()) ||
-                        b.grp_name?.toLowerCase().includes(stockSearchQuery.toLowerCase())
-                      : true
-                  )
-                  .map((b) => (
-                    <TableRow key={b.bar_no} className="hover:bg-amber-50">
-                      <TableCell className="font-bold text-amber-700">{b.bar_no}</TableCell>
-                      <TableCell>{b.bar_no}</TableCell>
-                      <TableCell>{b.grp_name || "SILK SAREE"}</TableCell>
-                      <TableCell className="text-right">₹{b.pc_pur_rate || 1000}</TableCell>
-                      <TableCell className="text-right font-bold text-emerald-700">₹{b.pc_sale_rate || 1200}</TableCell>
-                      <TableCell className="text-center">
-                        <Button
-                          size="sm"
-                          className="h-6 text-xs bg-amber-600 hover:bg-amber-700 text-white font-bold"
-                          onClick={() => {
-                            addStockItemToGrid(b);
-                            setIsStockModalOpen(false);
-                          }}
-                        >
-                          Select & Add
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
+              <TableBody className="text-xs">
+                {stockItems.map((b, idx) => (
+                  <TableRow
+                    key={b.bar_no}
+                    className={`cursor-pointer transition-colors ${
+                      selectedStockRowIndex === idx
+                        ? "bg-sky-100 dark:bg-sky-950 font-bold"
+                        : "hover:bg-amber-50"
+                    }`}
+                    onClick={() => setSelectedStockRowIndex(idx)}
+                    onDoubleClick={() => {
+                      addStockItemToGrid(b);
+                      setIsStockModalOpen(false);
+                    }}
+                  >
+                    <TableCell className="text-center p-1">{idx + 1}</TableCell>
+                    <TableCell className="p-1 font-bold text-amber-800">{b.bar_no}</TableCell>
+                    <TableCell className="text-right p-1 font-bold">{b.qty || 1}</TableCell>
+                    <TableCell className="text-right p-1">{(b.pc_pur_rate || 500).toFixed(2)}</TableCell>
+                    <TableCell className="text-right p-1">{(b.cost_rate || 500).toFixed(2)}</TableCell>
+                    <TableCell className="text-right p-1">100.00</TableCell>
+                    <TableCell className="text-right p-1 font-bold text-emerald-700">
+                      {(b.pc_sale_rate || 1000).toFixed(2)}
+                    </TableCell>
+                    <TableCell className="p-1">1111</TableCell>
+                    <TableCell className="text-right p-1">1.00</TableCell>
+                    <TableCell className="p-1">24-01-2019</TableCell>
+                    <TableCell className="p-1">123</TableCell>
+                    <TableCell className="p-1">Peetex Sarees</TableCell>
+                  </TableRow>
+                ))}
               </TableBody>
             </Table>
+          </div>
+
+          <div className="bg-slate-100 p-2 border-t flex justify-between items-center text-xs font-mono font-bold">
+            <div className="flex gap-2 items-center">
+              <span className="bg-white border px-3 py-1 rounded text-slate-900 font-bold">
+                {stockItems.length}
+              </span>
+            </div>
+
+            <div className="flex gap-2">
+              <Button
+                size="sm"
+                className="h-7 text-xs bg-slate-200 text-slate-900 border hover:bg-slate-300 font-bold px-4"
+                onClick={() => {
+                  if (stockItems[selectedStockRowIndex]) {
+                    addStockItemToGrid(stockItems[selectedStockRowIndex]);
+                    setIsStockModalOpen(false);
+                  }
+                }}
+              >
+                Proceed [F5]
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 text-xs text-red-600 font-bold px-4"
+                onClick={() => setIsStockModalOpen(false)}
+              >
+                Cancel [Esc]
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* IMAGE 4: PAYMENT DETAILS MODAL (Payment Details [F8]) */}
+      <Dialog open={isPaymentModalOpen} onOpenChange={setIsPaymentModalOpen}>
+        <DialogContent className="max-w-2xl p-0 border">
+          <div className="bg-slate-200 dark:bg-slate-700 px-3 py-1.5 font-bold text-xs border-b text-slate-900 dark:text-slate-100 flex justify-between">
+            <span>Payment Details [F8]</span>
+            <button
+              onClick={() => setIsPaymentModalOpen(false)}
+              className="text-slate-600 hover:text-slate-900"
+            >
+              ✕
+            </button>
+          </div>
+
+          <div className="p-3 space-y-2">
+            {/* Top Amount & Red Balance Bar (Image 4) */}
+            <div className="grid grid-cols-2 gap-2 text-xs font-mono font-bold">
+              <div className="flex items-center gap-2">
+                <span className="text-slate-700">Amount</span>
+                <Input
+                  readOnly
+                  value={totals.grandTotal.toFixed(2)}
+                  className="h-7 text-xs text-right bg-white font-black text-sm"
+                />
+              </div>
+
+              <div className="flex items-center gap-2">
+                <span className="text-red-600 font-black">Balance</span>
+                <Input
+                  readOnly
+                  value={paymentBalanceRemaining.toFixed(2)}
+                  className="h-7 text-xs text-right bg-white font-black text-red-600 text-sm"
+                />
+              </div>
+            </div>
+
+            {/* Payment Table Breakdown (Image 4) */}
+            <Table className="w-full text-xs border font-mono">
+              <TableHeader className="bg-slate-100 font-bold text-[11px]">
+                <TableRow>
+                  <TableHead className="w-40 p-1 font-bold">Payment Type</TableHead>
+                  <TableHead className="w-36 text-right p-1 font-bold">Amount</TableHead>
+                  <TableHead className="p-1 font-bold">Remarks</TableHead>
+                </TableRow>
+              </TableHeader>
+
+              <TableBody className="text-xs">
+                {paymentRows.map((p, idx) => (
+                  <TableRow key={p.type} className="hover:bg-amber-50">
+                    <TableCell className="p-1 font-bold text-slate-800">{p.type}</TableCell>
+                    <TableCell className="p-1 text-right">
+                      <Input
+                        type="number"
+                        value={p.amount || ""}
+                        onChange={(e) =>
+                          handlePaymentAmountChange(idx, Number(e.target.value) || 0)
+                        }
+                        className={`h-6 text-xs text-right font-bold ${
+                          p.amount > 0 ? "bg-amber-200 text-slate-950 font-black" : "bg-white"
+                        }`}
+                      />
+                    </TableCell>
+                    <TableCell className="p-1">
+                      <Input
+                        value={p.remarks}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setPaymentRows((prev) => {
+                            const updated = [...prev];
+                            updated[idx].remarks = val;
+                            return updated;
+                          });
+                        }}
+                        className="h-6 text-xs bg-white"
+                      />
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+
+          <div className="bg-slate-100 p-2 border-t flex justify-end gap-2 text-xs font-bold">
+            <Button
+              size="sm"
+              className="h-7 text-xs bg-slate-200 text-slate-900 border hover:bg-slate-300 font-bold px-4"
+              onClick={handleFinalSaveInvoice}
+              disabled={loading || paymentBalanceRemaining > 0}
+            >
+              Save [F10]
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 text-xs text-red-600 font-bold px-4"
+              onClick={() => setIsPaymentModalOpen(false)}
+            >
+              Cancel [Esc]
+            </Button>
           </div>
         </DialogContent>
       </Dialog>
