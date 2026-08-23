@@ -46,6 +46,7 @@ interface POSGridRow {
   batchNo: string;
   prcode: number;
   productName: string;
+  hsnCode: string;
   qty: number;
   unitName: string;
   gross: number;
@@ -65,6 +66,32 @@ interface PaymentRow {
   remarks: string;
 }
 
+// Convert numbers to words for thermal tax invoice print
+function numberToWords(num: number): string {
+  const a = [
+    "", "One ", "Two ", "Three ", "Four ", "Five ", "Six ", "Seven ", "Eight ", "Nine ", "Ten ",
+    "Eleven ", "Twelve ", "Thirteen ", "Fourteen ", "Fifteen ", "Sixteen ", "Seventeen ", "Eighteen ", "Nineteen "
+  ];
+  const b = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"];
+
+  const inWords = (n: number): string => {
+    if ((n = n.toString() as any).length > 9) return "overflow";
+    let nArr = ("000000000" + n).substr(-9).match(/^(\d{2})(\d{2})(\d{2})(\d{1})(\d{2})$/);
+    if (!nArr) return "";
+    let str = "";
+    str += nArr[1] !== "00" ? (a[Number(nArr[1])] || b[Number(nArr[1][0])] + " " + a[Number(nArr[1][1])]) + "Crore " : "";
+    str += nArr[2] !== "00" ? (a[Number(nArr[2])] || b[Number(nArr[2][0])] + " " + a[Number(nArr[2][1])]) + "Lakh " : "";
+    str += nArr[3] !== "00" ? (a[Number(nArr[3])] || b[Number(nArr[3][0])] + " " + a[Number(nArr[3][1])]) + "Thousand " : "";
+    str += nArr[4] !== "0" ? (a[Number(nArr[4])] || b[Number(nArr[4][0])] + " " + a[Number(nArr[4][1])]) + "Hundred " : "";
+    str += nArr[5] !== "00" ? ((str !== "") ? "and " : "") + (a[Number(nArr[5])] || b[Number(nArr[5][0])] + " " + a[Number(nArr[5][1])]) : "";
+    return str.trim();
+  };
+
+  const integerPart = Math.floor(Math.abs(num));
+  const words = inWords(integerPart);
+  return words ? `${words} Rupees Only` : "Zero Rupees Only";
+}
+
 export default function RetailSalePOSPage() {
   const router = useRouter();
   const { company } = useApp();
@@ -80,13 +107,13 @@ export default function RetailSalePOSPage() {
   const [scanInput, setScanInput] = useState<string>("");
   const scanInputRef = useRef<HTMLInputElement>(null);
 
-  // Stock Summary Banner line (Image 3: C-Rate: T.TT, S-Rate: T.TT : Stock : 23 PCS)
+  // Stock Summary Banner line
   const [stockBannerText, setStockBannerText] = useState<string>(
     "C-Rate: T.TT, S-Rate: T.TT : Stock : 23 PCS"
   );
 
-  // Voucher Details Panel (Image 3)
-  const [invoiceNo, setInvoiceNo] = useState<string>("POS-1001");
+  // Voucher Details Panel - POS-000001 6-digit zero padded
+  const [invoiceNo, setInvoiceNo] = useState<string>("POS-000001");
   const [invoiceTime, setInvoiceTime] = useState<string>("17:48:48");
   const [invoiceDate, setInvoiceDate] = useState<string>(
     new Date().toISOString().split("T")[0]
@@ -98,22 +125,22 @@ export default function RetailSalePOSPage() {
   const [expensesAmt, setExpensesAmt] = useState<number>(0);
   const [remarks, setRemarks] = useState<string>("");
 
-  // Customer Details Bar (Image 3)
+  // Customer Details Bar
   const [customerMobile, setCustomerMobile] = useState<string>("");
   const [customerName, setCustomerName] = useState<string>("");
   const [customerEmail, setCustomerEmail] = useState<string>("");
 
-  // Customers & Stock Lists from DB
+  // DB Maps & Lists
   const [customers, setCustomers] = useState<any[]>([]);
   const [stockItems, setStockItems] = useState<any[]>([]);
   const [savedInvoices, setSavedInvoices] = useState<any[]>([]);
   const [currentIndex, setCurrentIndex] = useState<number>(-1);
+  const [productTaxMap, setProductTaxMap] = useState<Map<string, { gstPerc: number; hsnCode: string }>>(new Map());
 
   // Main POS Grid Rows
   const [gridRows, setGridRows] = useState<POSGridRow[]>([]);
 
-  // Modals state: Stock Modal (Image 2) and Payment Modal (Image 1)
-  // NEVER AUTO-OPEN ON SCREEN LOAD
+  // Modals state: Stock Modal and Payment Modal (NEVER AUTO-OPEN ON LOAD)
   const [isStockModalOpen, setIsStockModalOpen] = useState<boolean>(false);
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState<boolean>(false);
 
@@ -131,7 +158,7 @@ export default function RetailSalePOSPage() {
     }
   }, [selectedStockRowIndex, isStockModalOpen]);
 
-  // Payment Breakdown Table (Image 1: CASH, CN/ADVANCE, CARD, UPI / QR CODE)
+  // Payment Breakdown Table
   const [paymentRows, setPaymentRows] = useState<PaymentRow[]>([
     { type: "CASH", amount: 0, remarks: "" },
     { type: "CN/ADVANCE", amount: 0, remarks: "" },
@@ -143,26 +170,43 @@ export default function RetailSalePOSPage() {
   const focusHighlightClass =
     "focus:bg-yellow-200 focus:text-slate-950 focus:ring-2 focus:ring-amber-500 font-medium transition-colors";
 
-  // Initial Fetch: Load Customers, Stock List with Vendor Names, & Saved Invoices
+  // Initial Fetch: Load Ledgers, Product GST Tax & HSN rates from DB, Available Barcodes, & Saved Invoices
   const fetchInitialData = useCallback(async () => {
     if (!company?.frm_code) return;
     try {
       setInvoiceTime(new Date().toLocaleTimeString());
 
-      // 1. Fetch Customers & Suppliers (Ledgers)
-      const { data: cData } = await supabase
-        .from("ledger")
-        .select("ledg_code, ledg_name, ph_no, cell_no1, bal_amt, op_bal")
-        .eq("frm_code", company.frm_code)
-        .order("ledg_name", { ascending: true });
+      // 1. Fetch Customers & Suppliers (Ledgers) and Products (GST Tax Rates & HSN)
+      const [cRes, prodRes] = await Promise.all([
+        supabase
+          .from("ledger")
+          .select("ledg_code, ledg_name, ph_no, cell_no1, bal_amt, op_bal")
+          .eq("frm_code", company.frm_code)
+          .order("ledg_name", { ascending: true }),
+        supabase
+          .from("product")
+          .select("prd_code, prd_name, gst_perc, hsn_code")
+          .eq("frm_code", company.frm_code)
+      ]);
 
       const ledgMap = new Map<number, string>();
-      if (cData) {
-        setCustomers(cData);
-        cData.forEach((l) => ledgMap.set(l.ledg_code, l.ledg_name));
+      if (cRes.data) {
+        setCustomers(cRes.data);
+        cRes.data.forEach((l) => ledgMap.set(l.ledg_code, l.ledg_name));
       }
 
-      // 2. Fetch Available Barcodes from bar_temp and attach exact Supplier / Vendor Name from whom stock was purchased
+      const prodMap = new Map<string, { gstPerc: number; hsnCode: string }>();
+      if (prodRes.data) {
+        prodRes.data.forEach((p) => {
+          prodMap.set(String(p.prd_code), {
+            gstPerc: p.gst_perc || 5,
+            hsnCode: p.hsn_code || "50079010",
+          });
+        });
+      }
+      setProductTaxMap(prodMap);
+
+      // 2. Fetch Available Barcodes from bar_temp and attach exact Supplier / Vendor Name
       const { data: barData } = await supabase
         .from("bar_temp")
         .select("*")
@@ -191,10 +235,10 @@ export default function RetailSalePOSPage() {
 
       if (soldData) setSavedInvoices(soldData);
 
-      // Auto Invoice Number with POS- Prefix
+      // Auto Invoice Number beginning at POS-000001
       if (mode === "add") {
-        const nextNum = (soldData?.length || 0) + 1001;
-        setInvoiceNo(`POS-${nextNum}`);
+        const nextSeq = (soldData?.length || 0) + 1;
+        setInvoiceNo(`POS-${String(nextSeq).padStart(6, "0")}`);
       }
     } catch (e) {
       console.error("Error fetching initial POS data:", e);
@@ -210,7 +254,7 @@ export default function RetailSalePOSPage() {
     scanInputRef.current?.focus();
   }, []);
 
-  // Stock Selection Modal Keyboard Up/Down Arrow Navigation (Image 2)
+  // Stock Selection Modal Keyboard Up/Down Arrow Navigation
   useEffect(() => {
     if (!isStockModalOpen) return;
     const handleStockModalKeyDown = (e: KeyboardEvent) => {
@@ -276,7 +320,7 @@ export default function RetailSalePOSPage() {
           addStockItemToGrid(bar);
           setScanInput("");
         } else {
-          // Multiple matches found -> Open Stock Selection Window (Image 2)
+          // Multiple matches found -> Open Stock Selection Window
           setStockItems(barRows);
           setSelectedStockRowIndex(0);
           setIsStockModalOpen(true);
@@ -290,9 +334,13 @@ export default function RetailSalePOSPage() {
     }
   };
 
-  // Add Item to POS Grid
+  // Add Item to POS Grid - Fetches Product GST tax rates & HSN code dynamically
   const addStockItemToGrid = (bar: any) => {
     const saleRate = bar.pc_sale_rate || bar.tag_rate || 1500;
+    const prcodeStr = String(bar.prcode || 101);
+    const taxInfo = productTaxMap.get(prcodeStr) || { gstPerc: 5, hsnCode: "50079010" };
+    const gstPerc = taxInfo.gstPerc || 5;
+    const halfTax = gstPerc / 2;
 
     const newRow: POSGridRow = {
       id: `pos-item-${bar.bar_no}-${Date.now()}`,
@@ -300,15 +348,16 @@ export default function RetailSalePOSPage() {
       productCode: bar.bar_no,
       batchNo: bar.bar_no,
       prcode: bar.prcode || 101,
-      productName: bar.grp_name || "PURE SILK",
+      productName: `${bar.grp_name || "Sarees"}-${taxInfo.hsnCode}`,
+      hsnCode: taxInfo.hsnCode,
       qty: 1,
-      unitName: bar.unit_name || "NOS",
+      unitName: bar.unit_name || "Nos",
       gross: 1,
       rateUnit: saleRate,
       amount: saleRate,
       disPerc: 0,
-      sgstPerc: 6,
-      cgstPerc: 6,
+      sgstPerc: halfTax,
+      cgstPerc: halfTax,
       igstPerc: 0,
       isBatchItem: false,
       maxStockQty: bar.qty || 1,
@@ -355,7 +404,7 @@ export default function RetailSalePOSPage() {
     );
   };
 
-  // Cash Discount Handlers (Percentage or Amount Value input)
+  // Cash Discount Handlers
   const handleCashDiscPercChange = (valStr: string) => {
     const perc = Math.max(0, Number(valStr) || 0);
     setCashDiscPerc(perc);
@@ -386,7 +435,7 @@ export default function RetailSalePOSPage() {
     setCashDiscPerc(Number(perc.toFixed(2)));
   };
 
-  // Calculations Summary (Image 3 Voucher Details Panel) - Calculates Exact Tax Values when Discounts are given
+  // Calculations Summary - Computes Exact Product GST Tax Rates
   const totals = useMemo(() => {
     let totalQty = 0;
     let subTotal = 0;
@@ -404,7 +453,7 @@ export default function RetailSalePOSPage() {
     const totDisc = totDiscAmt + cashDisc + splDisc;
     const taxableAmt = Math.max(0, subTotal - totDisc);
 
-    // Calculate exact SGST and CGST tax values taking discounts into account
+    // Calculate exact SGST and CGST tax values dynamically using product tax rates
     const effectiveTaxRatio = subTotal > 0 ? taxableAmt / subTotal : 1;
     let totSgst = 0;
     let totCgst = 0;
@@ -438,7 +487,7 @@ export default function RetailSalePOSPage() {
     };
   }, [gridRows, cashDisc, splDisc, expensesAmt]);
 
-  // Open Payment Details Modal (Image 1)
+  // Open Payment Details Modal
   const handleOpenPaymentModal = () => {
     if (gridRows.length === 0) {
       alert("Please scan at least one barcode item to create POS invoice.");
@@ -472,7 +521,7 @@ export default function RetailSalePOSPage() {
     });
   };
 
-  // Confirm & Save POS Invoice (Image 1 Save [F10]) with Duplicate Financial Year Invoice Check
+  // Confirm & Save POS Invoice with Financial Year Duplicate Check
   const handleFinalSaveInvoice = async () => {
     if (!company?.frm_code) return;
 
@@ -487,7 +536,6 @@ export default function RetailSalePOSPage() {
     setSaveSuccess(null);
 
     try {
-      // 1. Strict Financial Year Duplicate Invoice Check
       if (mode === "add") {
         const { data: existing } = await supabase
           .from("bar_temp")
@@ -505,7 +553,6 @@ export default function RetailSalePOSPage() {
         }
       }
 
-      // 2. Update bar_temp to set sold_status = 'S' (Sold)
       const barcodeList = gridRows.map((r) => r.productCode).filter(Boolean);
       if (barcodeList.length > 0) {
         await supabase
@@ -521,6 +568,9 @@ export default function RetailSalePOSPage() {
 
       setIsPaymentModalOpen(false);
       fetchInitialData();
+
+      // Trigger Thermal Receipt Printing
+      handlePrintReceipt();
 
       setTimeout(() => {
         setSaveSuccess(null);
@@ -568,26 +618,222 @@ export default function RetailSalePOSPage() {
     }
   };
 
+  // Thermal Receipt Printing for TVS RP 4200 (5-inch / 80mm printer) with Auto Cutter
+  const handlePrintReceipt = () => {
+    if (gridRows.length === 0) {
+      alert("Please add at least one item to print thermal receipt.");
+      return;
+    }
+
+    const printWin = window.open("", "_blank", "width=420,height=650");
+    if (!printWin) return;
+
+    const amountInWords = numberToWords(totals.grandTotal);
+
+    const itemsHtml = gridRows
+      .map((r) => {
+        const netRate = r.qty > 0 ? r.amount / r.qty : r.rateUnit;
+        return `
+          <tr>
+            <td style="padding: 2px 0; font-weight: bold;">${r.productName}</td>
+            <td style="text-align: right; padding: 2px 0;">${r.qty.toFixed(2)}</td>
+            <td style="text-align: center; padding: 2px 0;">${r.unitName}</td>
+            <td style="text-align: right; padding: 2px 0;">${r.rateUnit.toFixed(2)}</td>
+            <td style="text-align: right; padding: 2px 0;">${netRate.toFixed(2)}</td>
+            <td style="text-align: right; padding: 2px 0; font-weight: bold;">${r.amount.toFixed(2)}</td>
+          </tr>
+        `;
+      })
+      .join("");
+
+    const paymentRowsHtml = paymentRows
+      .filter((p) => p.amount > 0)
+      .map(
+        (p) => `
+        <div style="display: flex; justify-content: space-between; font-weight: bold; margin-top: 2px;">
+          <span>${p.type}</span>
+          <span>${p.amount.toFixed(2)}</span>
+        </div>
+      `
+      )
+      .join("");
+
+    const htmlContent = `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <title>POS Tax Invoice - ${invoiceNo}</title>
+          <style>
+            @page {
+              size: 80mm auto;
+              margin: 0mm;
+            }
+            body {
+              font-family: 'Courier New', Courier, monospace;
+              font-size: 11px;
+              width: 78mm;
+              margin: 0 auto;
+              padding: 4mm 2mm;
+              color: #000;
+              background: #fff;
+            }
+            .text-center { text-align: center; }
+            .text-right { text-align: right; }
+            .bold { font-weight: bold; }
+            .title { font-size: 17px; font-weight: 900; letter-spacing: 0.5px; }
+            .border-top { border-top: 1px dashed #000; padding-top: 4px; margin-top: 4px; }
+            .border-bottom { border-bottom: 1px dashed #000; padding-bottom: 4px; margin-bottom: 4px; }
+            table { width: 100%; border-collapse: collapse; font-size: 10px; }
+            th { border-bottom: 1px dashed #000; text-align: left; padding: 2px 0; font-weight: bold; }
+            @media print {
+              .no-print { display: none; }
+              page-break-after: always;
+            }
+          </style>
+        </head>
+        <body>
+          <div class="text-center">
+            <div class="title">${company?.frm_name || "KANNAN SILKS"}</div>
+            <div>No 2/40, Raja Veethi Road</div>
+            <div>Chinthamaniur, Omalur Via</div>
+            <div>Salem (Dt)-636455</div>
+            <div>Ph: 9787738094</div>
+            <div>Email: kannnanhandloom@gmail.com</div>
+            <div class="bold" style="margin-top: 6px; font-size: 13px; text-decoration: underline;">Tax Invoice</div>
+          </div>
+
+          <div class="border-top border-bottom" style="font-size: 10px; margin-top: 6px;">
+            <div style="display: flex; justify-content: space-between;">
+              <span>No: <b>${invoiceNo}</b></span>
+              <span>Counter No: 0</span>
+              <span>Branch: Main</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; margin-top: 2px;">
+              <span>Date: ${invoiceDate}</span>
+              <span>Time: ${invoiceTime}</span>
+              <span>User: admin</span>
+            </div>
+          </div>
+
+          <table>
+            <thead>
+              <tr>
+                <th>PARTICULARS/HSN</th>
+                <th style="text-align: right;">QTY</th>
+                <th style="text-align: center;">UNIT</th>
+                <th style="text-align: right;">SALE RATE</th>
+                <th style="text-align: right;">NET RATE</th>
+                <th style="text-align: right;">AMOUNT</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${itemsHtml}
+            </tbody>
+          </table>
+
+          <div class="border-top" style="display: flex; justify-content: space-between; font-weight: bold;">
+            <span>Total Discount: ${totals.totDisc.toFixed(2)}</span>
+            <span>Total Amount: ${totals.subTotal.toFixed(2)}</span>
+          </div>
+
+          <div style="margin-top: 6px; font-size: 15px; font-weight: 900; text-align: center; border: 2px solid #000; padding: 4px;">
+            Total Bill Amount : ₹ ${totals.grandTotal.toFixed(2)}
+          </div>
+
+          <div style="margin-top: 4px; font-size: 9px; font-style: italic;">
+            Amount in Words: INR ${amountInWords}
+          </div>
+
+          <div style="display: flex; justify-content: space-between; margin-top: 4px; font-weight: bold; font-size: 10px;">
+            <span>Total Items: ${gridRows.length}</span>
+            <span>Total Qty: ${totals.totalQty.toFixed(2)} Nos</span>
+          </div>
+
+          <div class="border-top text-center bold" style="margin-top: 6px; font-size: 11px;">
+            --- PAYMENT SUMMARY ---
+          </div>
+          ${paymentRowsHtml}
+          <div style="display: flex; justify-content: space-between; font-weight: bold; margin-top: 2px; border-top: 1px dashed #000; padding-top: 2px;">
+            <span>Tendered</span>
+            <span>${totals.grandTotal.toFixed(2)}</span>
+          </div>
+
+          <div class="border-top text-center bold" style="margin-top: 6px; font-size: 11px;">
+            --- Details of Gst Tax ---
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th>Taxable</th>
+                <th style="text-align: right;">CGST%</th>
+                <th style="text-align: right;">Amt</th>
+                <th style="text-align: right;">SGST%</th>
+                <th style="text-align: right;">Amt</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>${totals.taxableAmt.toFixed(2)}</td>
+                <td style="text-align: right;">2.50%</td>
+                <td style="text-align: right;">${totals.totSgst.toFixed(2)}</td>
+                <td style="text-align: right;">2.50%</td>
+                <td style="text-align: right;">${totals.totCgst.toFixed(2)}</td>
+              </tr>
+            </tbody>
+          </table>
+          <div style="display: flex; justify-content: space-between; font-weight: bold; margin-top: 2px;">
+            <span>Total Tax</span>
+            <span>${totals.totalTax.toFixed(2)}</span>
+          </div>
+
+          <div class="border-top text-center bold" style="margin-top: 10px; font-size: 10px;">
+            <div>FIXED RATE &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; NO RETURN</div>
+            <div style="margin-top: 4px;">Thank You! Visit Again</div>
+          </div>
+
+          <!-- ESC/POS TVS RP 4200 Auto-Cutter Trigger -->
+          <div style="visibility: hidden; page-break-after: always;">\x1D\x56\x00</div>
+
+          <script>
+            window.onload = function() {
+              window.print();
+              setTimeout(function() { window.close(); }, 600);
+            };
+          </script>
+        </body>
+      </html>
+    `;
+
+    printWin.document.write(htmlContent);
+    printWin.document.close();
+  };
+
   // Load Saved Invoice for Prev / Next Navigation
   const loadSavedInvoiceRecord = (barRecord: any) => {
     if (!barRecord) return;
-    setInvoiceNo(`POS-${barRecord.bar_ref_id || 1001}`);
+    const seq = barRecord.bar_ref_id || 1;
+    setInvoiceNo(`POS-${String(seq).padStart(6, "0")}`);
     const rate = barRecord.pc_sale_rate || 1500;
+    const prcodeStr = String(barRecord.prcode || 101);
+    const taxInfo = productTaxMap.get(prcodeStr) || { gstPerc: 5, hsnCode: "50079010" };
+    const halfTax = (taxInfo.gstPerc || 5) / 2;
+
     const row: POSGridRow = {
       id: `pos-prev-${barRecord.bar_no}`,
       sno: 1,
       productCode: barRecord.bar_no,
       batchNo: barRecord.bar_no,
       prcode: barRecord.prcode || 101,
-      productName: barRecord.grp_name || "PURE SILK",
+      productName: `${barRecord.grp_name || "Sarees"}-${taxInfo.hsnCode}`,
+      hsnCode: taxInfo.hsnCode,
       qty: 1,
-      unitName: barRecord.unit_name || "NOS",
+      unitName: barRecord.unit_name || "Nos",
       gross: 1,
       rateUnit: rate,
       amount: rate,
       disPerc: 0,
-      sgstPerc: 6,
-      cgstPerc: 6,
+      sgstPerc: halfTax,
+      cgstPerc: halfTax,
       igstPerc: 0,
       isBatchItem: false,
       maxStockQty: 1,
@@ -617,7 +863,7 @@ export default function RetailSalePOSPage() {
     loadSavedInvoiceRecord(savedInvoices[newIdx]);
   };
 
-  // Reset Form (Image 3 New [F4])
+  // Reset Form
   const handleResetForm = () => {
     setMode("add");
     setCurrentIndex(-1);
@@ -632,7 +878,7 @@ export default function RetailSalePOSPage() {
     setTimeout(() => scanInputRef.current?.focus(), 100);
   };
 
-  // Keyboard Shortcuts Listener
+  // Keyboard Shortcuts Listener (Added F12 Print Shortcut)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -672,6 +918,9 @@ export default function RetailSalePOSPage() {
         } else {
           handleOpenPaymentModal();
         }
+      } else if (e.key === "F12") {
+        e.preventDefault();
+        handlePrintReceipt();
       } else if (e.key === "PageUp") {
         e.preventDefault();
         handlePrevInvoice();
@@ -686,7 +935,7 @@ export default function RetailSalePOSPage() {
 
   return (
     <div className="min-h-screen bg-slate-200 dark:bg-slate-900 p-1.5 space-y-1.5 font-sans text-xs">
-      {/* Top POS Header Bar (Image 3) */}
+      {/* Top POS Header Bar */}
       <div className="bg-lime-600 text-white px-3 py-1.5 rounded flex items-center justify-between shadow-sm">
         <div className="flex items-center gap-2">
           <div className="bg-white text-lime-700 rounded-full w-6 h-6 flex items-center justify-center font-black text-sm">
@@ -712,7 +961,7 @@ export default function RetailSalePOSPage() {
         </div>
       )}
 
-      {/* Step 1 & 2: Top Scan Input Bar & Stock Indicator (Image 3) */}
+      {/* Step 1 & 2: Top Scan Input Bar & Stock Indicator */}
       <div className="bg-slate-100 dark:bg-slate-800 p-2 rounded border border-slate-300 dark:border-slate-700 space-y-1">
         <div className="flex flex-wrap items-center gap-2">
           <div className="w-24">
@@ -768,7 +1017,7 @@ export default function RetailSalePOSPage() {
           </div>
         </div>
 
-        {/* Stock Banner Summary Line (Image 3: C-Rate: T.TT, S-Rate: T.TT : Stock : 23 PCS) */}
+        {/* Stock Banner Summary Line */}
         <div className="bg-sky-50 dark:bg-sky-950/60 border border-sky-200 text-sky-800 dark:text-sky-200 px-3 py-1 rounded text-[11px] font-mono font-bold flex justify-between">
           <span>{stockBannerText}</span>
           <span>Shift+F7: Change Product Name</span>
@@ -777,7 +1026,7 @@ export default function RetailSalePOSPage() {
 
       {/* STEP 3 & MAIN LAYOUT: GRID TABLE & VOUCHER DETAILS PANEL */}
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-1.5">
-        {/* Main Grid Table (Image 3 - Removed redundant Unit column, formatted Qty, Rate, SGST, CGST) */}
+        {/* Main Grid Table */}
         <div className="lg:col-span-3 space-y-1.5">
           <Card className="shadow-sm border overflow-hidden">
             <div className="overflow-x-auto min-h-[340px] max-h-[480px]">
@@ -865,7 +1114,7 @@ export default function RetailSalePOSPage() {
               </Table>
             </div>
 
-            {/* Grid Summary Footer Line (Image 3) */}
+            {/* Grid Summary Footer Line */}
             <div className="bg-slate-100 dark:bg-slate-800 p-1.5 flex items-center justify-between font-mono font-bold text-xs border-t">
               <span className="w-8 text-center">{gridRows.length}</span>
               <div className="flex gap-12 text-right">
@@ -879,7 +1128,7 @@ export default function RetailSalePOSPage() {
           </Card>
         </div>
 
-        {/* Right Side Voucher Details Panel (Image 3 - Added Cash Disc % and Amt textboxes) */}
+        {/* Right Side Voucher Details Panel */}
         <div className="lg:col-span-1 space-y-1.5">
           <Card className="shadow-sm border bg-slate-50 dark:bg-slate-800">
             <div className="bg-slate-200 dark:bg-slate-700 px-2 py-1 font-bold text-[11px] text-slate-800 dark:text-slate-100 flex justify-between">
@@ -926,7 +1175,7 @@ export default function RetailSalePOSPage() {
                   <span className="font-bold">{totals.subTotal.toFixed(2)}</span>
                 </div>
 
-                {/* CASH DISCOUNT TWO TEXTBOXES: Percentage (%) & Value Amount (₹) */}
+                {/* CASH DISCOUNT TWO TEXTBOXES */}
                 <div className="flex justify-between items-center gap-1">
                   <span className="text-slate-600 font-bold text-[11px]">Cash Disc.</span>
                   <div className="flex items-center gap-1">
@@ -1007,7 +1256,7 @@ export default function RetailSalePOSPage() {
                 />
               </div>
 
-              {/* BIG BRIGHT GREEN NET TOTAL DISPLAY BOX (Image 3) */}
+              {/* BIG BRIGHT GREEN NET TOTAL DISPLAY BOX */}
               <div className="bg-lime-500 text-slate-950 p-2 rounded text-right border-2 border-lime-600 shadow-inner mt-2">
                 <span className="text-2xl font-black font-mono tracking-tight">
                   {totals.grandTotal.toFixed(2)}
@@ -1018,7 +1267,7 @@ export default function RetailSalePOSPage() {
         </div>
       </div>
 
-      {/* BOTTOM CUSTOMER DETAILS BAR (Image 3) */}
+      {/* BOTTOM CUSTOMER DETAILS BAR */}
       <div className="bg-slate-100 dark:bg-slate-800 p-1.5 rounded border flex flex-wrap items-center justify-between gap-2 text-xs font-sans">
         <div className="flex flex-wrap items-center gap-3">
           <div className="flex items-center gap-1">
@@ -1056,7 +1305,7 @@ export default function RetailSalePOSPage() {
         </div>
       </div>
 
-      {/* BOTTOM ACTION BUTTONS TOOLBAR (Added Delete F9 and Cancel Esc buttons) */}
+      {/* BOTTOM ACTION BUTTONS TOOLBAR (Added Print F12 Button for TVS RP 4200 Thermal Receipt Printer) */}
       <div className="bg-white dark:bg-slate-800 p-1.5 rounded border flex flex-wrap items-center justify-between gap-2 shadow-sm">
         <div className="flex flex-wrap items-center gap-1.5">
           <Button
@@ -1081,6 +1330,14 @@ export default function RetailSalePOSPage() {
             disabled={mode !== "edit"}
           >
             Delete [F9]
+          </Button>
+          <Button
+            size="sm"
+            className="h-7 text-xs bg-blue-600 hover:bg-blue-700 text-white font-bold border shadow"
+            onClick={handlePrintReceipt}
+          >
+            <Printer className="h-3.5 w-3.5 mr-1" />
+            Print [F12]
           </Button>
           <Button
             size="sm"
@@ -1110,7 +1367,7 @@ export default function RetailSalePOSPage() {
         </div>
       </div>
 
-      {/* IMAGE 2: STOCK SELECTION POPUP MODAL (Removed Design Column, Display exact Supplier Vendor Name in spacious Account Name column) */}
+      {/* STOCK SELECTION POPUP MODAL */}
       <Dialog open={isStockModalOpen} onOpenChange={setIsStockModalOpen}>
         <DialogContent className="max-w-5xl max-h-[85vh] p-0 border">
           <div className="bg-slate-300 dark:bg-slate-700 px-3 py-1.5 font-bold text-xs border-b text-slate-900 dark:text-slate-100 flex justify-between items-center">
@@ -1213,7 +1470,7 @@ export default function RetailSalePOSPage() {
         </DialogContent>
       </Dialog>
 
-      {/* IMAGE 1: PAYMENT DETAILS MODAL (Payment Details [F8]) */}
+      {/* PAYMENT DETAILS MODAL */}
       <Dialog open={isPaymentModalOpen} onOpenChange={setIsPaymentModalOpen}>
         <DialogContent className="max-w-2xl p-0 border">
           <div className="bg-slate-200 dark:bg-slate-700 px-3 py-1.5 font-bold text-xs border-b text-slate-900 dark:text-slate-100 flex justify-between items-center">
@@ -1221,7 +1478,6 @@ export default function RetailSalePOSPage() {
           </div>
 
           <div className="p-3 space-y-2">
-            {/* Top Amount & Red Balance Bar (Image 1) */}
             <div className="grid grid-cols-2 gap-2 text-xs font-mono font-bold">
               <div className="flex items-center gap-2">
                 <span className="text-slate-700">Amount</span>
@@ -1242,7 +1498,6 @@ export default function RetailSalePOSPage() {
               </div>
             </div>
 
-            {/* Payment Table Breakdown (Image 1) */}
             <Table className="w-full text-xs border font-mono">
               <TableHeader className="bg-slate-100 font-bold text-[11px]">
                 <TableRow>
