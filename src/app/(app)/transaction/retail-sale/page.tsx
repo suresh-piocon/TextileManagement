@@ -225,7 +225,7 @@ export default function RetailSalePOSPage() {
         );
       }
 
-      // 3. Fetch Sold Barcodes for Previous / Next Navigation
+      // 3. Fetch Sold Barcodes for Previous / Next Navigation & Distinct Invoice Count
       const { data: soldData } = await supabase
         .from("bar_temp")
         .select("*")
@@ -235,9 +235,12 @@ export default function RetailSalePOSPage() {
 
       if (soldData) setSavedInvoices(soldData);
 
-      // Auto Invoice Number beginning at POS-000001
+      // Auto Invoice Number beginning at POS-000001 (based on distinct saved invoice numbers)
       if (mode === "add") {
-        const nextSeq = (soldData?.length || 0) + 1;
+        const distinctInvoices = new Set(
+          (soldData || []).map((b) => b.inv_no).filter(Boolean)
+        );
+        const nextSeq = distinctInvoices.size + 1;
         setInvoiceNo(`POS-${String(nextSeq).padStart(6, "0")}`);
       }
     } catch (e) {
@@ -542,7 +545,7 @@ export default function RetailSalePOSPage() {
           .select("bar_no")
           .eq("frm_code", company.frm_code)
           .eq("sold_status", "S")
-          .ilike("bar_no", `%${invoiceNo}%`);
+          .eq("inv_no", invoiceNo);
 
         if (existing && existing.length > 0) {
           alert(
@@ -557,7 +560,10 @@ export default function RetailSalePOSPage() {
       if (barcodeList.length > 0) {
         await supabase
           .from("bar_temp")
-          .update({ sold_status: "S" })
+          .update({
+            sold_status: "S",
+            inv_no: invoiceNo,
+          })
           .in("bar_no", barcodeList)
           .eq("frm_code", company.frm_code);
       }
@@ -603,7 +609,10 @@ export default function RetailSalePOSPage() {
       if (barcodeList.length > 0) {
         await supabase
           .from("bar_temp")
-          .update({ sold_status: "A" })
+          .update({
+            sold_status: "A",
+            inv_no: null,
+          })
           .in("bar_no", barcodeList)
           .eq("frm_code", company.frm_code);
       }
@@ -625,7 +634,7 @@ export default function RetailSalePOSPage() {
       return;
     }
 
-    const printWin = window.open("", "_blank", "width=420,height=650");
+    const printWin = window.open("", "_blank", "width=480,height=700");
     if (!printWin) return;
 
     const amountInWords = numberToWords(totals.grandTotal);
@@ -635,12 +644,12 @@ export default function RetailSalePOSPage() {
         const netRate = r.qty > 0 ? r.amount / r.qty : r.rateUnit;
         return `
           <tr>
-            <td style="padding: 2px 0; font-weight: bold;">${r.productName}</td>
-            <td style="text-align: right; padding: 2px 0;">${r.qty.toFixed(2)}</td>
-            <td style="text-align: center; padding: 2px 0;">${r.unitName}</td>
-            <td style="text-align: right; padding: 2px 0;">${r.rateUnit.toFixed(2)}</td>
-            <td style="text-align: right; padding: 2px 0;">${netRate.toFixed(2)}</td>
-            <td style="text-align: right; padding: 2px 0; font-weight: bold;">${r.amount.toFixed(2)}</td>
+            <td style="padding: 2px 0; font-weight: bold; width: 40%; text-align: left;">${r.productName}</td>
+            <td style="text-align: right; padding: 2px 0; width: 12%;">${r.qty.toFixed(2)}</td>
+            <td style="text-align: center; padding: 2px 0; width: 10%;">${r.unitName}</td>
+            <td style="text-align: right; padding: 2px 0; width: 13%;">${r.rateUnit.toFixed(2)}</td>
+            <td style="text-align: right; padding: 2px 0; width: 12%;">${netRate.toFixed(2)}</td>
+            <td style="text-align: right; padding: 2px 0; font-weight: bold; width: 13%;">${r.amount.toFixed(2)}</td>
           </tr>
         `;
       })
@@ -668,10 +677,20 @@ export default function RetailSalePOSPage() {
               size: 80mm auto;
               margin: 0mm;
             }
+            @media print {
+              html, body {
+                width: 80mm;
+                margin: 0;
+                padding: 0;
+              }
+              .no-print { display: none; }
+              page-break-after: always;
+            }
             body {
               font-family: 'Courier New', Courier, monospace;
               font-size: 11px;
-              width: 78mm;
+              line-height: 1.3;
+              width: 76mm;
               margin: 0 auto;
               padding: 4mm 2mm;
               color: #000;
@@ -680,15 +699,12 @@ export default function RetailSalePOSPage() {
             .text-center { text-align: center; }
             .text-right { text-align: right; }
             .bold { font-weight: bold; }
-            .title { font-size: 17px; font-weight: 900; letter-spacing: 0.5px; }
+            .title { font-size: 16px; font-weight: 900; letter-spacing: 0.5px; }
             .border-top { border-top: 1px dashed #000; padding-top: 4px; margin-top: 4px; }
             .border-bottom { border-bottom: 1px dashed #000; padding-bottom: 4px; margin-bottom: 4px; }
-            table { width: 100%; border-collapse: collapse; font-size: 10px; }
+            table { width: 100%; border-collapse: collapse; font-size: 10px; table-layout: fixed; }
             th { border-bottom: 1px dashed #000; text-align: left; padding: 2px 0; font-weight: bold; }
-            @media print {
-              .no-print { display: none; }
-              page-break-after: always;
-            }
+            td { padding: 2px 0; word-break: break-all; }
           </style>
         </head>
         <body>
@@ -718,12 +734,12 @@ export default function RetailSalePOSPage() {
           <table>
             <thead>
               <tr>
-                <th>PARTICULARS/HSN</th>
-                <th style="text-align: right;">QTY</th>
-                <th style="text-align: center;">UNIT</th>
-                <th style="text-align: right;">SALE RATE</th>
-                <th style="text-align: right;">NET RATE</th>
-                <th style="text-align: right;">AMOUNT</th>
+                <th style="width: 40%;">PARTICULARS/HSN</th>
+                <th style="text-align: right; width: 12%;">QTY</th>
+                <th style="text-align: center; width: 10%;">UNIT</th>
+                <th style="text-align: right; width: 13%;">SALE RATE</th>
+                <th style="text-align: right; width: 12%;">NET RATE</th>
+                <th style="text-align: right; width: 13%;">AMOUNT</th>
               </tr>
             </thead>
             <tbody>
@@ -797,7 +813,6 @@ export default function RetailSalePOSPage() {
           <script>
             window.onload = function() {
               window.print();
-              setTimeout(function() { window.close(); }, 600);
             };
           </script>
         </body>
