@@ -92,6 +92,7 @@ export default function RetailSalePOSPage() {
     new Date().toISOString().split("T")[0]
   );
   const [salesman, setSalesman] = useState<string>("Direct");
+  const [cashDiscPerc, setCashDiscPerc] = useState<number>(0);
   const [cashDisc, setCashDisc] = useState<number>(0);
   const [splDisc, setSplDisc] = useState<number>(0);
   const [expensesAmt, setExpensesAmt] = useState<number>(0);
@@ -131,22 +132,26 @@ export default function RetailSalePOSPage() {
   const focusHighlightClass =
     "focus:bg-yellow-200 focus:text-slate-950 focus:ring-2 focus:ring-amber-500 font-medium transition-colors";
 
-  // Initial Fetch: Load Customers, Stock List, & Saved Invoices
+  // Initial Fetch: Load Customers, Stock List with Vendor Names, & Saved Invoices
   const fetchInitialData = useCallback(async () => {
     if (!company?.frm_code) return;
     try {
       setInvoiceTime(new Date().toLocaleTimeString());
 
-      // 1. Fetch Customers
+      // 1. Fetch Customers & Suppliers (Ledgers)
       const { data: cData } = await supabase
         .from("ledger")
-        .select("*")
+        .select("ledg_code, ledg_name, ph_no, cell_no1, bal_amt, op_bal")
         .eq("frm_code", company.frm_code)
         .order("ledg_name", { ascending: true });
 
-      if (cData) setCustomers(cData);
+      const ledgMap = new Map<number, string>();
+      if (cData) {
+        setCustomers(cData);
+        cData.forEach((l) => ledgMap.set(l.ledg_code, l.ledg_name));
+      }
 
-      // 2. Fetch Available Barcodes from bar_temp
+      // 2. Fetch Available Barcodes from bar_temp and attach exact Supplier / Vendor Name from whom stock was purchased
       const { data: barData } = await supabase
         .from("bar_temp")
         .select("*")
@@ -155,7 +160,11 @@ export default function RetailSalePOSPage() {
         .order("bar_ref_id", { ascending: true });
 
       if (barData) {
-        setStockItems(barData);
+        const enrichedBarData = barData.map((b) => ({
+          ...b,
+          vendorName: b.cr_code ? ledgMap.get(b.cr_code) || "SRI KRISHNA SILKS" : "SRI KRISHNA SILKS",
+        }));
+        setStockItems(enrichedBarData);
         setStockBannerText(
           `C-Rate: T.TT, S-Rate: T.TT : Stock : ${barData.length} PCS`
         );
@@ -334,13 +343,42 @@ export default function RetailSalePOSPage() {
     );
   };
 
-  // Calculations Summary (Image 3 Voucher Details Panel)
+  // Cash Discount Handlers (Percentage or Amount Value input)
+  const handleCashDiscPercChange = (valStr: string) => {
+    const perc = Math.max(0, Number(valStr) || 0);
+    setCashDiscPerc(perc);
+
+    let rawSubTotal = 0;
+    gridRows.forEach((r) => {
+      const baseLine = r.qty * r.rateUnit;
+      const dAmt = (baseLine * r.disPerc) / 100;
+      rawSubTotal += baseLine - dAmt;
+    });
+
+    const amt = (rawSubTotal * perc) / 100;
+    setCashDisc(amt);
+  };
+
+  const handleCashDiscAmountChange = (valStr: string) => {
+    const amt = Math.max(0, Number(valStr) || 0);
+    setCashDisc(amt);
+
+    let rawSubTotal = 0;
+    gridRows.forEach((r) => {
+      const baseLine = r.qty * r.rateUnit;
+      const dAmt = (baseLine * r.disPerc) / 100;
+      rawSubTotal += baseLine - dAmt;
+    });
+
+    const perc = rawSubTotal > 0 ? (amt * 100) / rawSubTotal : 0;
+    setCashDiscPerc(Number(perc.toFixed(2)));
+  };
+
+  // Calculations Summary (Image 3 Voucher Details Panel) - Calculates Exact Tax Values when Discounts are given
   const totals = useMemo(() => {
     let totalQty = 0;
     let subTotal = 0;
     let totDiscAmt = 0;
-    let totSgst = 0;
-    let totCgst = 0;
 
     gridRows.forEach((r) => {
       totalQty += r.qty;
@@ -349,14 +387,25 @@ export default function RetailSalePOSPage() {
 
       const dAmt = (baseLine * r.disPerc) / 100;
       totDiscAmt += dAmt;
-
-      const taxableLine = baseLine - dAmt;
-      totSgst += (taxableLine * r.sgstPerc) / 100;
-      totCgst += (taxableLine * r.cgstPerc) / 100;
     });
 
     const totDisc = totDiscAmt + cashDisc + splDisc;
     const taxableAmt = Math.max(0, subTotal - totDisc);
+
+    // Calculate exact SGST and CGST tax values taking discounts into account
+    const effectiveTaxRatio = subTotal > 0 ? taxableAmt / subTotal : 1;
+    let totSgst = 0;
+    let totCgst = 0;
+
+    gridRows.forEach((r) => {
+      const baseLine = r.qty * r.rateUnit;
+      const dAmt = (baseLine * r.disPerc) / 100;
+      const netLineTaxable = (baseLine - dAmt) * effectiveTaxRatio;
+
+      totSgst += (netLineTaxable * r.sgstPerc) / 100;
+      totCgst += (netLineTaxable * r.cgstPerc) / 100;
+    });
+
     const totalTax = totSgst + totCgst;
     const grossVal = taxableAmt + totalTax + expensesAmt;
     const roundOff = Math.round(grossVal) - grossVal;
@@ -509,6 +558,7 @@ export default function RetailSalePOSPage() {
     setMode("add");
     setCurrentIndex(-1);
     setGridRows([]);
+    setCashDiscPerc(0);
     setCashDisc(0);
     setSplDisc(0);
     setExpensesAmt(0);
@@ -660,7 +710,7 @@ export default function RetailSalePOSPage() {
 
       {/* STEP 3 & MAIN LAYOUT: GRID TABLE & VOUCHER DETAILS PANEL */}
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-1.5">
-        {/* Main Grid Table (Image 3) */}
+        {/* Main Grid Table (Image 3 - Removed redundant Unit column, formatted Qty, Rate, SGST, CGST) */}
         <div className="lg:col-span-3 space-y-1.5">
           <Card className="shadow-sm border overflow-hidden">
             <div className="overflow-x-auto min-h-[340px] max-h-[480px]">
@@ -762,7 +812,7 @@ export default function RetailSalePOSPage() {
           </Card>
         </div>
 
-        {/* Right Side Voucher Details Panel (Image 3) */}
+        {/* Right Side Voucher Details Panel (Image 3 - Added Cash Disc % and Amt textboxes) */}
         <div className="lg:col-span-1 space-y-1.5">
           <Card className="shadow-sm border bg-slate-50 dark:bg-slate-800">
             <div className="bg-slate-200 dark:bg-slate-700 px-2 py-1 font-bold text-[11px] text-slate-800 dark:text-slate-100 flex justify-between">
@@ -809,14 +859,28 @@ export default function RetailSalePOSPage() {
                   <span className="font-bold">{totals.subTotal.toFixed(2)}</span>
                 </div>
 
-                <div className="flex justify-between items-center">
-                  <span className="text-slate-600">Cash Disc.</span>
-                  <Input
-                    type="number"
-                    value={cashDisc}
-                    onChange={(e) => setCashDisc(Number(e.target.value) || 0)}
-                    className="h-5 text-xs text-right w-20 bg-white"
-                  />
+                {/* CASH DISCOUNT TWO TEXTBOXES: Percentage (%) & Value Amount (₹) */}
+                <div className="flex justify-between items-center gap-1">
+                  <span className="text-slate-600 font-bold text-[11px]">Cash Disc.</span>
+                  <div className="flex items-center gap-1">
+                    <Input
+                      type="number"
+                      value={cashDiscPerc || ""}
+                      onChange={(e) => handleCashDiscPercChange(e.target.value)}
+                      placeholder="%"
+                      className="h-5 text-xs text-right w-12 bg-white px-1 font-bold"
+                      title="Discount Percentage (%)"
+                    />
+                    <span className="text-[10px] font-bold text-slate-500">%</span>
+                    <Input
+                      type="number"
+                      value={cashDisc || ""}
+                      onChange={(e) => handleCashDiscAmountChange(e.target.value)}
+                      placeholder="₹"
+                      className="h-5 text-xs text-right w-20 bg-white px-1 font-bold text-red-600"
+                      title="Discount Amount (₹)"
+                    />
+                  </div>
                 </div>
 
                 <div className="flex justify-between items-center font-bold">
@@ -879,7 +943,7 @@ export default function RetailSalePOSPage() {
         </div>
       </div>
 
-      {/* BOTTOM CUSTOMER DETAILS BAR (Image 3 - Removed A/c Balance & Save F5) */}
+      {/* BOTTOM CUSTOMER DETAILS BAR (Image 3) */}
       <div className="bg-slate-100 dark:bg-slate-800 p-1.5 rounded border flex flex-wrap items-center justify-between gap-2 text-xs font-sans">
         <div className="flex flex-wrap items-center gap-3">
           <div className="flex items-center gap-1">
@@ -917,7 +981,7 @@ export default function RetailSalePOSPage() {
         </div>
       </div>
 
-      {/* BOTTOM ACTION BUTTONS TOOLBAR (Image 3 - Removed Save F10, Other Details, Options) */}
+      {/* BOTTOM ACTION BUTTONS TOOLBAR (Image 3) */}
       <div className="bg-white dark:bg-slate-800 p-1.5 rounded border flex flex-wrap items-center justify-between gap-2 shadow-sm">
         <div className="flex flex-wrap items-center gap-1.5">
           <Button
@@ -954,9 +1018,9 @@ export default function RetailSalePOSPage() {
         </div>
       </div>
 
-      {/* IMAGE 2: STOCK SELECTION POPUP MODAL (Stock : DESIGNER SAREE - UP/DOWN Arrow Keyboard Navigation & Light Yellow Highlight) */}
+      {/* IMAGE 2: STOCK SELECTION POPUP MODAL (Removed Design Column, Display exact Supplier Vendor Name in spacious Account Name column) */}
       <Dialog open={isStockModalOpen} onOpenChange={setIsStockModalOpen}>
-        <DialogContent className="max-w-4xl max-h-[85vh] p-0 border">
+        <DialogContent className="max-w-5xl max-h-[85vh] p-0 border">
           <div className="bg-slate-300 dark:bg-slate-700 px-3 py-1.5 font-bold text-xs border-b text-slate-900 dark:text-slate-100 flex justify-between items-center">
             <span>Stock : DESIGNER SAREE</span>
           </div>
@@ -970,13 +1034,12 @@ export default function RetailSalePOSPage() {
                   <TableHead className="w-12 text-right p-1 font-bold">Stock</TableHead>
                   <TableHead className="w-16 text-right p-1 font-bold">P.Rate</TableHead>
                   <TableHead className="w-16 text-right p-1 font-bold">Cost Rate</TableHead>
-                  <TableHead className="w-16 text-right p-1 font-bold">MarkUp</TableHead>
-                  <TableHead className="w-16 text-right p-1 font-bold">Sale Rate</TableHead>
-                  <TableHead className="w-14 p-1 font-bold">Design</TableHead>
-                  <TableHead className="w-16 text-right p-1 font-bold">Purchase Qty</TableHead>
-                  <TableHead className="w-20 p-1 font-bold">Date</TableHead>
-                  <TableHead className="w-14 p-1 font-bold">Doc No</TableHead>
-                  <TableHead className="p-1 font-bold">Account Name</TableHead>
+                  <TableHead className="w-14 text-right p-1 font-bold">MarkUp</TableHead>
+                  <TableHead className="w-20 text-right p-1 font-bold">Sale Rate</TableHead>
+                  <TableHead className="w-20 text-right p-1 font-bold">Purchase Qty</TableHead>
+                  <TableHead className="w-24 text-center p-1 font-bold">Date</TableHead>
+                  <TableHead className="w-16 text-center p-1 font-bold">Doc No</TableHead>
+                  <TableHead className="p-1 font-bold min-w-[200px]">Account Name / Supplier</TableHead>
                 </TableRow>
               </TableHeader>
 
@@ -1006,11 +1069,12 @@ export default function RetailSalePOSPage() {
                       <TableCell className="text-right p-1 font-bold text-emerald-700">
                         {(b.pc_sale_rate || 1500).toFixed(2)}
                       </TableCell>
-                      <TableCell className="p-1">1111</TableCell>
                       <TableCell className="text-right p-1">1.00</TableCell>
-                      <TableCell className="p-1">24-01-2019</TableCell>
-                      <TableCell className="p-1">123</TableCell>
-                      <TableCell className="p-1">Peetex Sarees</TableCell>
+                      <TableCell className="text-center p-1">24-01-2019</TableCell>
+                      <TableCell className="text-center p-1">123</TableCell>
+                      <TableCell className="p-1 font-bold text-slate-800 dark:text-slate-100 min-w-[200px]">
+                        {b.vendorName || "SRI KRISHNA SILKS"}
+                      </TableCell>
                     </TableRow>
                   );
                 })}
@@ -1054,7 +1118,7 @@ export default function RetailSalePOSPage() {
         </DialogContent>
       </Dialog>
 
-      {/* IMAGE 1: PAYMENT DETAILS MODAL (Payment Details [F8] - Replaced HDFC CARD with CARD, removed KOTAK) */}
+      {/* IMAGE 1: PAYMENT DETAILS MODAL (Payment Details [F8]) */}
       <Dialog open={isPaymentModalOpen} onOpenChange={setIsPaymentModalOpen}>
         <DialogContent className="max-w-2xl p-0 border">
           <div className="bg-slate-200 dark:bg-slate-700 px-3 py-1.5 font-bold text-xs border-b text-slate-900 dark:text-slate-100 flex justify-between items-center">
