@@ -1126,70 +1126,83 @@ export default function RetailSalePOSPage() {
                     <TableHead className="w-12 text-right p-1 font-bold">Dis %</TableHead>
                     <TableHead className="w-14 text-right p-1 font-bold">SGST</TableHead>
                     <TableHead className="w-14 text-right p-1 font-bold">CGST</TableHead>
+                    <TableHead className="w-24 text-right p-1 font-bold text-lime-700 dark:text-lime-400">Net Amount</TableHead>
                   </TableRow>
                 </TableHeader>
 
                 <TableBody className="text-xs font-mono">
                   {gridRows.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={12} className="text-center p-12 text-slate-400 font-bold">
+                      <TableCell colSpan={13} className="text-center p-12 text-slate-400 font-bold">
                         Scan Saree Barcode or Product Code above to add to invoice.
                       </TableCell>
                     </TableRow>
                   ) : (
-                    gridRows.map((row, idx) => (
-                      <TableRow key={row.id} className="hover:bg-amber-100/60 transition-colors">
-                        <TableCell className="text-center p-1">
-                          <button
-                            onClick={() => handleDeleteRow(idx)}
-                            className="text-red-600 hover:text-red-800 font-black p-0.5"
-                          >
-                            ✕
-                          </button>
-                        </TableCell>
-                        <TableCell className="text-center p-1 font-bold text-slate-500">
-                          {row.sno}
-                        </TableCell>
-                        <TableCell className="p-1 font-bold text-amber-800 dark:text-amber-300">
-                          {row.productCode}
-                        </TableCell>
-                        <TableCell className="p-1 font-bold text-slate-800 dark:text-slate-100">
-                          {row.productName}
-                        </TableCell>
-                        <TableCell className="p-1 text-right">
-                          <Input
-                            type="number"
-                            value={row.qty}
-                            onChange={(e) => handleCellChange(idx, "qty", e.target.value)}
-                            className={`h-7 w-16 text-xs text-right bg-white font-bold px-2 inline-block border border-slate-300 ${focusHighlightClass}`}
-                          />
-                        </TableCell>
-                        <TableCell className="p-1 text-center font-bold text-slate-700">
-                          {row.unitName}
-                        </TableCell>
-                        <TableCell className="p-1 text-right font-medium">
-                          {row.gross.toFixed(3)}
-                        </TableCell>
-                        <TableCell className="p-1 text-right font-bold">
-                          <Input
-                            type="number"
-                            value={row.rateUnit}
-                            onChange={(e) => handleCellChange(idx, "rateUnit", e.target.value)}
-                            className={`h-7 w-20 text-xs text-right bg-white font-bold px-2 inline-block border border-slate-300 ${focusHighlightClass}`}
-                          />
-                        </TableCell>
-                        <TableCell className="p-1 text-right font-bold text-slate-900 dark:text-white">
-                          {row.amount.toFixed(2)}
-                        </TableCell>
-                        <TableCell className="p-1 text-right">{row.disPerc}</TableCell>
-                        <TableCell className="p-1 text-right font-bold text-slate-600">
-                          {row.sgstPerc.toFixed(2)}
-                        </TableCell>
-                        <TableCell className="p-1 text-right font-bold text-slate-600">
-                          {row.cgstPerc.toFixed(2)}
-                        </TableCell>
-                      </TableRow>
-                    ))
+                    gridRows.map((row, idx) => {
+                      const baseLine = row.qty * row.rateUnit;
+                      const dAmt = (baseLine * row.disPerc) / 100;
+                      const lineTaxableOriginal = Math.max(0, baseLine - dAmt);
+                      const lineTaxableRevised = lineTaxableOriginal * totals.factor;
+                      const lineGst = (lineTaxableRevised * (row.sgstPerc + row.cgstPerc)) / 100;
+                      const lineNetAmt = lineTaxableRevised + lineGst;
+
+                      return (
+                        <TableRow key={row.id} className="hover:bg-amber-100/60 transition-colors">
+                          <TableCell className="text-center p-1">
+                            <button
+                              onClick={() => handleDeleteRow(idx)}
+                              className="text-red-600 hover:text-red-800 font-black p-0.5"
+                            >
+                              ✕
+                            </button>
+                          </TableCell>
+                          <TableCell className="text-center p-1 font-bold text-slate-500">
+                            {row.sno}
+                          </TableCell>
+                          <TableCell className="p-1 font-bold text-amber-800 dark:text-amber-300">
+                            {row.productCode}
+                          </TableCell>
+                          <TableCell className="p-1 font-bold text-slate-800 dark:text-slate-100">
+                            {row.productName}
+                          </TableCell>
+                          <TableCell className="p-1 text-right">
+                            <Input
+                              type="number"
+                              value={row.qty}
+                              onChange={(e) => handleCellChange(idx, "qty", e.target.value)}
+                              className={`h-7 w-16 text-xs text-right bg-white font-bold px-2 inline-block border border-slate-300 ${focusHighlightClass}`}
+                            />
+                          </TableCell>
+                          <TableCell className="p-1 text-center font-bold text-slate-700">
+                            {row.unitName}
+                          </TableCell>
+                          <TableCell className="p-1 text-right font-medium">
+                            {row.gross.toFixed(3)}
+                          </TableCell>
+                          <TableCell className="p-1 text-right font-bold">
+                            <Input
+                              type="number"
+                              value={row.rateUnit}
+                              onChange={(e) => handleCellChange(idx, "rateUnit", e.target.value)}
+                              className={`h-7 w-20 text-xs text-right bg-white font-bold px-2 inline-block border border-slate-300 ${focusHighlightClass}`}
+                            />
+                          </TableCell>
+                          <TableCell className="p-1 text-right font-bold text-slate-900 dark:text-white">
+                            {row.amount.toFixed(2)}
+                          </TableCell>
+                          <TableCell className="p-1 text-right">{row.disPerc}</TableCell>
+                          <TableCell className="p-1 text-right font-bold text-slate-600">
+                            {row.sgstPerc.toFixed(2)}
+                          </TableCell>
+                          <TableCell className="p-1 text-right font-bold text-slate-600">
+                            {row.cgstPerc.toFixed(2)}
+                          </TableCell>
+                          <TableCell className="p-1 text-right font-black text-lime-700 dark:text-lime-300">
+                            {lineNetAmt.toFixed(2)}
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })
                   )}
                 </TableBody>
               </Table>
@@ -1198,11 +1211,14 @@ export default function RetailSalePOSPage() {
             {/* Grid Summary Footer Line */}
             <div className="bg-slate-100 dark:bg-slate-800 p-1.5 flex items-center justify-between font-mono font-bold text-xs border-t">
               <span className="w-8 text-center">{gridRows.length}</span>
-              <div className="flex gap-12 text-right">
+              <div className="flex gap-8 text-right">
                 <span className="w-16">{totals.totalQty.toFixed(2)}</span>
                 <span className="w-16">{totals.totalQty.toFixed(3)}</span>
                 <span className="w-24 text-slate-900 dark:text-white">
                   {totals.subTotal.toFixed(2)}
+                </span>
+                <span className="w-24 text-lime-700 dark:text-lime-400 font-black">
+                  {totals.grandTotal.toFixed(2)}
                 </span>
               </div>
             </div>
