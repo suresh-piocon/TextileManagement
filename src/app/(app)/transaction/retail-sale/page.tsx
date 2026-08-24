@@ -345,8 +345,7 @@ export default function RetailSalePOSPage() {
 
   // Add Item to POS Grid - Fetches Product GST tax rates & HSN code dynamically
   const addStockItemToGrid = (bar: any) => {
-    const originalMrp = Number(bar.tag_rate || bar.pc_pur_rate || bar.pc_sale_rate || 2000);
-    const saleRate = Number(bar.pc_sale_rate || bar.tag_rate || 2000);
+    const saleRateMrp = Number(bar.pc_sale_rate || 2000);
     const prcodeStr = String(bar.prcode || 101);
     const taxInfo = productTaxMap.get(prcodeStr) || { gstPerc: 5, hsnCode: "50079010" };
     const gstPerc = taxInfo.gstPerc || 5;
@@ -363,9 +362,9 @@ export default function RetailSalePOSPage() {
       qty: 1,
       unitName: bar.unit_name || "Nos",
       gross: 1,
-      mrp: originalMrp,
-      rateUnit: saleRate,
-      amount: saleRate,
+      mrp: saleRateMrp,
+      rateUnit: saleRateMrp,
+      amount: saleRateMrp,
       disPerc: 0,
       sgstPerc: halfTax,
       cgstPerc: halfTax,
@@ -607,28 +606,18 @@ export default function RetailSalePOSPage() {
         }
       }
 
-      if (gridRows.length > 0) {
-        await Promise.all(
-          gridRows.map(async (r) => {
-            const baseLine = r.qty * r.rateUnit;
-            const dAmt = (baseLine * r.disPerc) / 100;
-            const lineTaxableOriginal = Math.max(0, baseLine - dAmt);
-            const revisedTaxable = lineTaxableOriginal * totals.factor;
-            const revisedSaleRate = r.qty > 0 ? revisedTaxable / r.qty : r.rateUnit;
-
-            await supabase
-              .from("bar_temp")
-              .update({
-                sold_status: "S",
-                inv_no: invoiceNo,
-                inv_date: invoiceDate,
-                pc_sale_rate: Number(revisedSaleRate.toFixed(2)),
-                margin: Number(cashDisc.toFixed(2)),
-              })
-              .eq("bar_no", r.productCode)
-              .eq("frm_code", company.frm_code);
+      const barcodeList = gridRows.map((r) => r.productCode).filter(Boolean);
+      if (barcodeList.length > 0) {
+        await supabase
+          .from("bar_temp")
+          .update({
+            sold_status: "S",
+            inv_no: invoiceNo,
+            inv_date: invoiceDate,
+            margin: Number(cashDisc.toFixed(2)),
           })
-        );
+          .in("bar_no", barcodeList)
+          .eq("frm_code", company.frm_code);
       }
 
       const msg = `Invoice Saved Successfully!\nPOS Bill No #${invoiceNo} for ₹${totals.grandTotal.toLocaleString("en-IN")}`;
