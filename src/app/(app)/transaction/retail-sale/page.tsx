@@ -125,9 +125,14 @@ export default function RetailSalePOSPage() {
   const [expensesAmt, setExpensesAmt] = useState<number>(0);
   const [remarks, setRemarks] = useState<string>("");
 
-  // Customer Details Bar
+  // Customer Details & Cash Sale Customer Modal [F6]
+  const [isCustomerModalOpen, setIsCustomerModalOpen] = useState<boolean>(false);
   const [customerMobile, setCustomerMobile] = useState<string>("");
-  const [customerName, setCustomerName] = useState<string>("");
+  const [customerName, setCustomerName] = useState<string>("Cash Customer");
+  const [customerAddress, setCustomerAddress] = useState<string>("");
+  const [customerGstNo, setCustomerGstNo] = useState<string>("");
+  const [customerState, setCustomerState] = useState<string>("Tamil Nadu");
+  const [customerStateCode, setCustomerStateCode] = useState<string>("33");
   const [customerEmail, setCustomerEmail] = useState<string>("");
 
   // DB Maps & Lists
@@ -967,6 +972,13 @@ export default function RetailSalePOSPage() {
     setExpensesAmt(0);
     setRemarks("");
     setScanInput("");
+    setCustomerName("Cash Customer");
+    setCustomerMobile("");
+    setCustomerAddress("");
+    setCustomerGstNo("");
+    setCustomerState("Tamil Nadu");
+    setCustomerStateCode("33");
+    setCustomerEmail("");
     fetchInitialData();
     setTimeout(() => scanInputRef.current?.focus(), 100);
   };
@@ -977,9 +989,17 @@ export default function RetailSalePOSPage() {
       if (e.key === "Escape") {
         setIsStockModalOpen(false);
         setIsPaymentModalOpen(false);
+        setIsCustomerModalOpen(false);
       } else if (e.key === "Insert") {
         e.preventDefault();
         scanInputRef.current?.focus();
+      } else if (e.key === "F2") {
+        e.preventDefault();
+        if (mode === "edit") {
+          handleOpenPaymentModal();
+        } else {
+          alert("Edit mode is active when viewing a saved invoice record (via Prev/Next).");
+        }
       } else if (e.key === "F3") {
         e.preventDefault();
         setIsStockModalOpen(true);
@@ -996,8 +1016,7 @@ export default function RetailSalePOSPage() {
         }
       } else if (e.key === "F6") {
         e.preventDefault();
-        const custElem = document.getElementById("pos-cust-mobile");
-        custElem?.focus();
+        setIsCustomerModalOpen(true);
       } else if (e.key === "F8") {
         e.preventDefault();
         if (!isPaymentModalOpen) handleOpenPaymentModal();
@@ -1132,20 +1151,19 @@ export default function RetailSalePOSPage() {
                     <TableHead className="min-w-[180px] p-1 font-bold">Product Name [Shift+F7]</TableHead>
                     <TableHead className="w-16 text-right p-1 font-bold">Qty</TableHead>
                     <TableHead className="w-20 text-center p-1 font-bold">Unit Name</TableHead>
-                    <TableHead className="w-14 text-right p-1 font-bold">Gross</TableHead>
                     <TableHead className="w-24 text-right p-1 font-bold">Rate/Unit</TableHead>
                     <TableHead className="w-24 text-right p-1 font-bold">Amount</TableHead>
                     <TableHead className="w-12 text-right p-1 font-bold">Dis %</TableHead>
                     <TableHead className="w-14 text-right p-1 font-bold">SGST</TableHead>
                     <TableHead className="w-14 text-right p-1 font-bold">CGST</TableHead>
-                    <TableHead className="w-24 text-right p-1 font-bold text-lime-700 dark:text-lime-400">Net Amount</TableHead>
+                    <TableHead className="w-32 text-right p-1 font-bold text-lime-700 dark:text-lime-400">Net Amount</TableHead>
                   </TableRow>
                 </TableHeader>
 
                 <TableBody className="text-xs font-mono">
                   {gridRows.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={13} className="text-center p-12 text-slate-400 font-bold">
+                      <TableCell colSpan={12} className="text-center p-12 text-slate-400 font-bold">
                         Scan Saree Barcode or Product Code above to add to invoice.
                       </TableCell>
                     </TableRow>
@@ -1188,9 +1206,6 @@ export default function RetailSalePOSPage() {
                           <TableCell className="p-1 text-center font-bold text-slate-700">
                             {row.unitName}
                           </TableCell>
-                          <TableCell className="p-1 text-right font-medium">
-                            {row.gross.toFixed(3)}
-                          </TableCell>
                           <TableCell className="p-1 text-right font-bold">
                             <Input
                               type="number"
@@ -1209,7 +1224,7 @@ export default function RetailSalePOSPage() {
                           <TableCell className="p-1 text-right font-bold text-slate-600">
                             {row.cgstPerc.toFixed(2)}
                           </TableCell>
-                          <TableCell className="p-1 text-right font-black text-lime-700 dark:text-lime-300">
+                          <TableCell className="p-1 text-right font-black text-lime-700 dark:text-lime-300 w-32">
                             {lineNetAmt.toFixed(2)}
                           </TableCell>
                         </TableRow>
@@ -1225,11 +1240,10 @@ export default function RetailSalePOSPage() {
               <span className="w-8 text-center">{gridRows.length}</span>
               <div className="flex gap-8 text-right">
                 <span className="w-16">{totals.totalQty.toFixed(2)}</span>
-                <span className="w-16">{totals.totalQty.toFixed(3)}</span>
                 <span className="w-24 text-slate-900 dark:text-white">
                   {totals.subTotal.toFixed(2)}
                 </span>
-                <span className="w-24 text-lime-700 dark:text-lime-400 font-black">
+                <span className="w-32 text-lime-700 dark:text-lime-400 font-black">
                   {totals.grandTotal.toFixed(2)}
                 </span>
               </div>
@@ -1368,7 +1382,7 @@ export default function RetailSalePOSPage() {
               {/* EDITABLE BIG BRIGHT GREEN FINAL RECEIVED AMOUNT BOX */}
               <div className="bg-lime-500 text-slate-950 p-2 rounded border-2 border-lime-600 shadow-inner mt-2 space-y-1">
                 <div className="flex justify-between items-center text-[10px] font-black uppercase tracking-wider text-slate-950">
-                  <span>Net Received [Reverse Tax]</span>
+                  <span>Net Received</span>
                   <span>₹</span>
                 </div>
                 <Input
@@ -1395,7 +1409,8 @@ export default function RetailSalePOSPage() {
               id="pos-cust-mobile"
               value={customerMobile}
               onChange={(e) => setCustomerMobile(e.target.value)}
-              className="h-6 text-xs w-28 bg-white"
+              onClick={() => setIsCustomerModalOpen(true)}
+              className="h-6 text-xs w-28 bg-white cursor-pointer"
             />
           </div>
 
@@ -1404,23 +1419,31 @@ export default function RetailSalePOSPage() {
             <Input
               value={customerName}
               onChange={(e) => setCustomerName(e.target.value)}
-              className="h-6 text-xs w-28 bg-white font-bold"
+              onClick={() => setIsCustomerModalOpen(true)}
+              className="h-6 text-xs w-32 bg-white font-bold cursor-pointer"
             />
           </div>
 
           <div className="flex items-center gap-1">
-            <span className="font-bold text-slate-600">E-Mail ID</span>
+            <span className="font-bold text-slate-600">GSTIN</span>
             <Input
-              value={customerEmail}
-              onChange={(e) => setCustomerEmail(e.target.value)}
-              className="h-6 text-xs w-36 bg-white"
+              value={customerGstNo}
+              onChange={(e) => setCustomerGstNo(e.target.value)}
+              onClick={() => setIsCustomerModalOpen(true)}
+              className="h-6 text-xs w-32 bg-white font-mono uppercase cursor-pointer"
+              placeholder="GST No"
             />
           </div>
-        </div>
 
-        <div className="flex items-center gap-4 font-mono font-bold text-slate-600">
-          <span>Tendered: 0.00</span>
-          <span>Refund: 0.00</span>
+          <div className="flex items-center gap-1">
+            <span className="font-bold text-slate-600">State</span>
+            <Input
+              value={customerState}
+              onChange={(e) => setCustomerState(e.target.value)}
+              onClick={() => setIsCustomerModalOpen(true)}
+              className="h-6 text-xs w-24 bg-white cursor-pointer"
+            />
+          </div>
         </div>
       </div>
 
@@ -1433,6 +1456,19 @@ export default function RetailSalePOSPage() {
             onClick={handleResetForm}
           >
             New [F4]
+          </Button>
+          <Button
+            size="sm"
+            className="h-7 text-xs bg-emerald-600 hover:bg-emerald-700 text-white font-bold border shadow px-3"
+            onClick={() => {
+              if (mode === "edit") {
+                handleOpenPaymentModal();
+              } else {
+                alert("Edit mode is active when viewing a saved invoice record (via Prev/Next).");
+              }
+            }}
+          >
+            Edit [F2]
           </Button>
           <Button
             size="sm"
@@ -1676,6 +1712,107 @@ export default function RetailSalePOSPage() {
               variant="outline"
               className="h-7 text-xs text-red-600 font-bold px-4"
               onClick={() => setIsPaymentModalOpen(false)}
+            >
+              Cancel [Esc]
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* CASH SALE CUSTOMER DETAILS MODAL [F6] */}
+      <Dialog open={isCustomerModalOpen} onOpenChange={setIsCustomerModalOpen}>
+        <DialogContent className="max-w-md p-0 border">
+          <div className="bg-slate-200 dark:bg-slate-700 px-3 py-1.5 font-bold text-xs border-b text-slate-900 dark:text-slate-100 flex justify-between items-center">
+            <span>Cash Sale Customer Details [F6]</span>
+          </div>
+
+          <div className="p-3 space-y-2 text-xs font-sans">
+            <div>
+              <Label className="text-[11px] font-bold text-slate-700">Customer Name *</Label>
+              <Input
+                value={customerName}
+                onChange={(e) => setCustomerName(e.target.value)}
+                placeholder="Cash Customer / Sumit"
+                className="h-7 text-xs bg-white font-bold"
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <Label className="text-[11px] font-bold text-slate-700">Mobile No</Label>
+                <Input
+                  value={customerMobile}
+                  onChange={(e) => setCustomerMobile(e.target.value)}
+                  placeholder="9876543210"
+                  className="h-7 text-xs bg-white"
+                />
+              </div>
+              <div>
+                <Label className="text-[11px] font-bold text-slate-700">E-Mail ID</Label>
+                <Input
+                  value={customerEmail}
+                  onChange={(e) => setCustomerEmail(e.target.value)}
+                  placeholder="customer@email.com"
+                  className="h-7 text-xs bg-white"
+                />
+              </div>
+            </div>
+
+            <div>
+              <Label className="text-[11px] font-bold text-slate-700">Address</Label>
+              <Input
+                value={customerAddress}
+                onChange={(e) => setCustomerAddress(e.target.value)}
+                placeholder="Door No, Street Name, City"
+                className="h-7 text-xs bg-white"
+              />
+            </div>
+
+            <div>
+              <Label className="text-[11px] font-bold text-slate-700">GSTIN No</Label>
+              <Input
+                value={customerGstNo}
+                onChange={(e) => setCustomerGstNo(e.target.value.toUpperCase())}
+                placeholder="33AAAAA0000A1Z5"
+                className="h-7 text-xs bg-white uppercase font-mono"
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <Label className="text-[11px] font-bold text-slate-700">State</Label>
+                <Input
+                  value={customerState}
+                  onChange={(e) => setCustomerState(e.target.value)}
+                  placeholder="Tamil Nadu"
+                  className="h-7 text-xs bg-white font-bold"
+                />
+              </div>
+              <div>
+                <Label className="text-[11px] font-bold text-slate-700">State Code</Label>
+                <Input
+                  value={customerStateCode}
+                  onChange={(e) => setCustomerStateCode(e.target.value)}
+                  placeholder="33"
+                  className="h-7 text-xs bg-white font-mono font-bold"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-slate-100 p-2 border-t flex justify-end gap-2 text-xs font-bold">
+            <Button
+              size="sm"
+              className="h-7 text-xs bg-amber-600 hover:bg-amber-700 text-white font-bold px-4 shadow"
+              onClick={() => setIsCustomerModalOpen(false)}
+            >
+              Save Customer Details [Enter]
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 text-xs text-red-600 font-bold px-4"
+              onClick={() => setIsCustomerModalOpen(false)}
             >
               Cancel [Esc]
             </Button>
