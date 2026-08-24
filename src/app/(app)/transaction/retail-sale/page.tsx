@@ -438,11 +438,14 @@ export default function RetailSalePOSPage() {
     setCashDiscPerc(Number(perc.toFixed(2)));
   };
 
-  // Calculations Summary - Computes Exact Product GST Tax Rates
+  // Calculations Summary - Reverse Tax Calculation from Final Received / Adjusted Amount
   const totals = useMemo(() => {
     let totalQty = 0;
     let subTotal = 0;
     let totDiscAmt = 0;
+
+    // 1. Calculate Original Taxable and Original Bill Amount before adjustment
+    let originalBillAmt = 0;
 
     gridRows.forEach((r) => {
       totalQty += r.qty;
@@ -451,23 +454,37 @@ export default function RetailSalePOSPage() {
 
       const dAmt = (baseLine * r.disPerc) / 100;
       totDiscAmt += dAmt;
+
+      const lineTaxableOriginal = Math.max(0, baseLine - dAmt);
+      const gstRateDecimal = (r.sgstPerc + r.cgstPerc) / 100;
+      const lineTotalOriginal = lineTaxableOriginal * (1 + gstRateDecimal);
+      originalBillAmt += lineTotalOriginal;
     });
 
     const totDisc = totDiscAmt + cashDisc + splDisc;
-    const taxableAmt = Math.max(0, subTotal - totDisc);
+    const targetReceivedAmt = Math.max(0, originalBillAmt - totDisc);
 
-    // Calculate exact SGST and CGST tax values dynamically using product tax rates
-    const effectiveTaxRatio = subTotal > 0 ? taxableAmt / subTotal : 1;
+    // Step 1: Reduction Factor = Received Amount / Original Bill Amount
+    const factor = originalBillAmt > 0 ? targetReceivedAmt / originalBillAmt : 1;
+
+    // Step 2: Apply Factor to Every Line for Reverse Tax Calculation
+    let taxableAmt = 0;
     let totSgst = 0;
     let totCgst = 0;
 
     gridRows.forEach((r) => {
       const baseLine = r.qty * r.rateUnit;
       const dAmt = (baseLine * r.disPerc) / 100;
-      const netLineTaxable = (baseLine - dAmt) * effectiveTaxRatio;
+      const lineTaxableOriginal = Math.max(0, baseLine - dAmt);
 
-      totSgst += (netLineTaxable * r.sgstPerc) / 100;
-      totCgst += (netLineTaxable * r.cgstPerc) / 100;
+      const revisedTaxable = lineTaxableOriginal * factor;
+      taxableAmt += revisedTaxable;
+
+      const revisedSgst = (revisedTaxable * r.sgstPerc) / 100;
+      const revisedCgst = (revisedTaxable * r.cgstPerc) / 100;
+
+      totSgst += revisedSgst;
+      totCgst += revisedCgst;
     });
 
     const totalTax = totSgst + totCgst;
@@ -487,6 +504,7 @@ export default function RetailSalePOSPage() {
       grossVal,
       roundOff,
       grandTotal,
+      factor,
     };
   }, [gridRows, cashDisc, splDisc, expensesAmt]);
 
@@ -641,7 +659,11 @@ export default function RetailSalePOSPage() {
 
     const itemsHtml = gridRows
       .map((r) => {
-        const netRate = r.qty > 0 ? r.amount / r.qty : r.rateUnit;
+        const baseLine = r.qty * r.rateUnit;
+        const dAmt = (baseLine * r.disPerc) / 100;
+        const lineTaxableOriginal = Math.max(0, baseLine - dAmt);
+        const revisedTaxable = lineTaxableOriginal * totals.factor;
+        const netRate = r.qty > 0 ? revisedTaxable / r.qty : r.rateUnit;
         return `
           <tr>
             <td style="padding: 2px 0; font-weight: bold; width: 44%; text-align: left;">${r.productName}</td>
