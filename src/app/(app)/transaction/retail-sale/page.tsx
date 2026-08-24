@@ -225,22 +225,22 @@ export default function RetailSalePOSPage() {
         );
       }
 
-      // 3. Fetch Sold Barcodes for Previous / Next Navigation & Distinct Invoice Count
+      // 3. Fetch Sold Barcodes for Previous / Next Navigation & Distinct Invoice List
       const { data: soldData } = await supabase
         .from("bar_temp")
-        .select("*")
+        .select("inv_no")
         .eq("frm_code", company.frm_code)
         .eq("sold_status", "S")
         .order("bar_ref_id", { ascending: true });
 
-      if (soldData) setSavedInvoices(soldData);
+      const distinctInvoices = Array.from(
+        new Set((soldData || []).map((b) => b.inv_no).filter(Boolean))
+      );
+      setSavedInvoices(distinctInvoices);
 
       // Auto Invoice Number beginning at POS-000001 (based on distinct saved invoice numbers)
       if (mode === "add") {
-        const distinctInvoices = new Set(
-          (soldData || []).map((b) => b.inv_no).filter(Boolean)
-        );
-        const nextSeq = distinctInvoices.size + 1;
+        const nextSeq = distinctInvoices.length + 1;
         setInvoiceNo(`POS-${String(nextSeq).padStart(6, "0")}`);
       }
     } catch (e) {
@@ -821,36 +821,60 @@ export default function RetailSalePOSPage() {
     printWin.document.close();
   };
 
-  // Load Saved Invoice for Prev / Next Navigation
-  const loadSavedInvoiceRecord = (barRecord: any) => {
-    if (!barRecord) return;
-    setInvoiceNo(barRecord.inv_no || "POS-000001");
-    const rate = barRecord.pc_sale_rate || 1500;
-    const prcodeStr = String(barRecord.prcode || 101);
-    const taxInfo = productTaxMap.get(prcodeStr) || { gstPerc: 5, hsnCode: "50079010" };
-    const halfTax = (taxInfo.gstPerc || 5) / 2;
+  // Load Saved Invoice for Prev / Next Navigation - Fetches ALL items belonging to the selected invoice
+  const loadSavedInvoiceRecord = async (invNo: string) => {
+    if (!invNo || !company?.frm_code) return;
+    setLoading(true);
+    try {
+      const { data: items, error } = await supabase
+        .from("bar_temp")
+        .select("*")
+        .eq("frm_code", company.frm_code)
+        .eq("sold_status", "S")
+        .eq("inv_no", invNo)
+        .order("bar_ref_id", { ascending: true });
 
-    const row: POSGridRow = {
-      id: `pos-prev-${barRecord.bar_no}`,
-      sno: 1,
-      productCode: barRecord.bar_no,
-      batchNo: barRecord.bar_no,
-      prcode: barRecord.prcode || 101,
-      productName: `${barRecord.grp_name || "Sarees"}-${taxInfo.hsnCode}`,
-      hsnCode: taxInfo.hsnCode,
-      qty: 1,
-      unitName: barRecord.unit_name || "Nos",
-      gross: 1,
-      rateUnit: rate,
-      amount: rate,
-      disPerc: 0,
-      sgstPerc: halfTax,
-      cgstPerc: halfTax,
-      igstPerc: 0,
-      isBatchItem: false,
-      maxStockQty: 1,
-    };
-    setGridRows([row]);
+      if (error || !items || items.length === 0) {
+        alert(`No saved records found for invoice ${invNo}`);
+        return;
+      }
+
+      const loadedRows: POSGridRow[] = items.map((bar, idx) => {
+        const saleRate = bar.pc_sale_rate || bar.tag_rate || 1500;
+        const prcodeStr = String(bar.prcode || 101);
+        const taxInfo = productTaxMap.get(prcodeStr) || { gstPerc: 5, hsnCode: "50079010" };
+        const halfTax = (taxInfo.gstPerc || 5) / 2;
+
+        return {
+          id: `pos-saved-${bar.bar_no}-${idx}`,
+          sno: idx + 1,
+          productCode: bar.bar_no,
+          batchNo: bar.bar_no,
+          prcode: bar.prcode || 101,
+          productName: `${bar.grp_name || "Sarees"}-${taxInfo.hsnCode}`,
+          hsnCode: taxInfo.hsnCode,
+          qty: bar.qty || 1,
+          unitName: bar.unit_name || "Nos",
+          gross: 1,
+          rateUnit: saleRate,
+          amount: (bar.qty || 1) * saleRate,
+          disPerc: 0,
+          sgstPerc: halfTax,
+          cgstPerc: halfTax,
+          igstPerc: 0,
+          isBatchItem: false,
+          maxStockQty: bar.qty || 1,
+        };
+      });
+
+      setInvoiceNo(invNo);
+      setGridRows(loadedRows);
+      setMode("edit");
+    } catch (e: any) {
+      console.error("Error loading saved POS invoice:", e);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handlePrevInvoice = () => {
@@ -860,7 +884,6 @@ export default function RetailSalePOSPage() {
     }
     const newIdx = currentIndex <= 0 ? savedInvoices.length - 1 : currentIndex - 1;
     setCurrentIndex(newIdx);
-    setMode("edit");
     loadSavedInvoiceRecord(savedInvoices[newIdx]);
   };
 
@@ -871,7 +894,6 @@ export default function RetailSalePOSPage() {
     }
     const newIdx = currentIndex >= savedInvoices.length - 1 ? 0 : currentIndex + 1;
     setCurrentIndex(newIdx);
-    setMode("edit");
     loadSavedInvoiceRecord(savedInvoices[newIdx]);
   };
 
