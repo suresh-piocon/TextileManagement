@@ -50,6 +50,7 @@ interface POSGridRow {
   qty: number;
   unitName: string;
   gross: number;
+  mrp: number;
   rateUnit: number;
   amount: number;
   disPerc: number;
@@ -344,7 +345,8 @@ export default function RetailSalePOSPage() {
 
   // Add Item to POS Grid - Fetches Product GST tax rates & HSN code dynamically
   const addStockItemToGrid = (bar: any) => {
-    const saleRate = bar.pc_sale_rate || bar.tag_rate || 1500;
+    const originalMrp = Number(bar.tag_rate || bar.pc_pur_rate || bar.pc_sale_rate || 2000);
+    const saleRate = Number(bar.pc_sale_rate || bar.tag_rate || 2000);
     const prcodeStr = String(bar.prcode || 101);
     const taxInfo = productTaxMap.get(prcodeStr) || { gstPerc: 5, hsnCode: "50079010" };
     const gstPerc = taxInfo.gstPerc || 5;
@@ -361,6 +363,7 @@ export default function RetailSalePOSPage() {
       qty: 1,
       unitName: bar.unit_name || "Nos",
       gross: 1,
+      mrp: originalMrp,
       rateUnit: saleRate,
       amount: saleRate,
       disPerc: 0,
@@ -706,13 +709,14 @@ export default function RetailSalePOSPage() {
         const lineTaxableOriginal = Math.max(0, baseLine - dAmt);
         const revisedTaxable = lineTaxableOriginal * totals.factor;
         const netRate = r.qty > 0 ? revisedTaxable / r.qty : r.rateUnit;
+        const saleRateMrp = r.mrp || r.rateUnit;
         return `
           <tr>
-            <td style="padding: 2px 0; font-weight: bold; width: 44%; text-align: left;">${r.productName}</td>
-            <td style="text-align: right; padding: 2px 0; width: 14%;">${r.qty.toFixed(2)}</td>
+            <td style="padding: 2px 0; font-weight: bold; width: 42%; text-align: left;">${r.productName}</td>
+            <td style="text-align: right; padding: 2px 0; width: 12%;">${r.qty.toFixed(2)}</td>
             <td style="text-align: center; padding: 2px 0; width: 12%;">${r.unitName}</td>
-            <td style="text-align: right; padding: 2px 0; width: 15%;">${r.rateUnit.toFixed(2)}</td>
-            <td style="text-align: right; padding: 2px 0; font-weight: bold; width: 15%;">${netRate.toFixed(2)}</td>
+            <td style="text-align: right; padding: 2px 0; width: 17%;">${saleRateMrp.toFixed(2)}</td>
+            <td style="text-align: right; padding: 2px 0; font-weight: bold; width: 17%;">${netRate.toFixed(2)}</td>
           </tr>
         `;
       })
@@ -904,7 +908,8 @@ export default function RetailSalePOSPage() {
       }
 
       const loadedRows: POSGridRow[] = items.map((bar, idx) => {
-        const saleRate = bar.pc_sale_rate || bar.tag_rate || 1500;
+        const originalMrp = Number(bar.tag_rate || bar.pc_pur_rate || bar.pc_sale_rate || 2000);
+        const saleRate = Number(bar.pc_sale_rate || bar.tag_rate || 1500);
         const prcodeStr = String(bar.prcode || 101);
         const taxInfo = productTaxMap.get(prcodeStr) || { gstPerc: 5, hsnCode: "50079010" };
         const halfTax = (taxInfo.gstPerc || 5) / 2;
@@ -920,6 +925,7 @@ export default function RetailSalePOSPage() {
           qty: bar.qty || 1,
           unitName: bar.unit_name || "Nos",
           gross: 1,
+          mrp: originalMrp,
           rateUnit: saleRate,
           amount: (bar.qty || 1) * saleRate,
           disPerc: 0,
@@ -1147,23 +1153,24 @@ export default function RetailSalePOSPage() {
                   <TableRow>
                     <TableHead className="w-6 text-center p-1 text-red-600 font-bold">Del</TableHead>
                     <TableHead className="w-8 text-center p-1 font-bold">S...</TableHead>
-                    <TableHead className="w-24 p-1 font-bold">Product Code</TableHead>
-                    <TableHead className="min-w-[180px] p-1 font-bold">Product Name [Shift+F7]</TableHead>
-                    <TableHead className="w-16 text-right p-1 font-bold">Qty</TableHead>
-                    <TableHead className="w-20 text-center p-1 font-bold">Unit Name</TableHead>
+                    <TableHead className="w-20 p-1 font-bold">Product Code</TableHead>
+                    <TableHead className="min-w-[150px] p-1 font-bold">Product Name [Shift+F7]</TableHead>
+                    <TableHead className="w-14 text-right p-1 font-bold">Qty</TableHead>
+                    <TableHead className="w-16 text-center p-1 font-bold">Unit Name</TableHead>
+                    <TableHead className="w-28 text-right p-1 font-bold text-amber-800 dark:text-amber-300">Sale Rate (MRP)</TableHead>
                     <TableHead className="w-24 text-right p-1 font-bold">Rate/Unit</TableHead>
                     <TableHead className="w-24 text-right p-1 font-bold">Amount</TableHead>
                     <TableHead className="w-12 text-right p-1 font-bold">Dis %</TableHead>
                     <TableHead className="w-14 text-right p-1 font-bold">SGST</TableHead>
                     <TableHead className="w-14 text-right p-1 font-bold">CGST</TableHead>
-                    <TableHead className="w-32 text-right p-1 font-bold text-lime-700 dark:text-lime-400">Net Amount</TableHead>
+                    <TableHead className="w-28 text-right p-1 font-bold text-lime-700 dark:text-lime-400">Net Amount</TableHead>
                   </TableRow>
                 </TableHeader>
 
                 <TableBody className="text-xs font-mono">
                   {gridRows.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={12} className="text-center p-12 text-slate-400 font-bold">
+                      <TableCell colSpan={13} className="text-center p-12 text-slate-400 font-bold">
                         Scan Saree Barcode or Product Code above to add to invoice.
                       </TableCell>
                     </TableRow>
@@ -1200,11 +1207,14 @@ export default function RetailSalePOSPage() {
                               type="number"
                               value={row.qty}
                               onChange={(e) => handleCellChange(idx, "qty", e.target.value)}
-                              className={`h-7 w-16 text-xs text-right bg-white font-bold px-2 inline-block border border-slate-300 ${focusHighlightClass}`}
+                              className={`h-7 w-12 text-xs text-right bg-white font-bold px-1 inline-block border border-slate-300 ${focusHighlightClass}`}
                             />
                           </TableCell>
                           <TableCell className="p-1 text-center font-bold text-slate-700">
                             {row.unitName}
+                          </TableCell>
+                          <TableCell className="p-1 text-right font-black text-amber-800 dark:text-amber-300 w-28">
+                            {row.mrp.toFixed(2)}
                           </TableCell>
                           <TableCell className="p-1 text-right font-bold">
                             <Input
@@ -1224,7 +1234,7 @@ export default function RetailSalePOSPage() {
                           <TableCell className="p-1 text-right font-bold text-slate-600">
                             {row.cgstPerc.toFixed(2)}
                           </TableCell>
-                          <TableCell className="p-1 text-right font-black text-lime-700 dark:text-lime-300 w-32">
+                          <TableCell className="p-1 text-right font-black text-lime-700 dark:text-lime-300 w-28">
                             {lineNetAmt.toFixed(2)}
                           </TableCell>
                         </TableRow>
@@ -1238,12 +1248,12 @@ export default function RetailSalePOSPage() {
             {/* Grid Summary Footer Line */}
             <div className="bg-slate-100 dark:bg-slate-800 p-1.5 flex items-center justify-between font-mono font-bold text-xs border-t">
               <span className="w-8 text-center">{gridRows.length}</span>
-              <div className="flex gap-8 text-right">
-                <span className="w-16">{totals.totalQty.toFixed(2)}</span>
+              <div className="flex gap-6 text-right">
+                <span className="w-12">{totals.totalQty.toFixed(2)}</span>
                 <span className="w-24 text-slate-900 dark:text-white">
                   {totals.subTotal.toFixed(2)}
                 </span>
-                <span className="w-32 text-lime-700 dark:text-lime-400 font-black">
+                <span className="w-28 text-lime-700 dark:text-lime-400 font-black">
                   {totals.grandTotal.toFixed(2)}
                 </span>
               </div>
