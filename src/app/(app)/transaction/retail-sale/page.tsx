@@ -438,6 +438,31 @@ export default function RetailSalePOSPage() {
     setCashDiscPerc(Number(perc.toFixed(2)));
   };
 
+  // Final Received Amount Handler (Directly Editable Bill Amount to Trigger Reverse Tax Calculation)
+  const handleFinalReceivedAmountChange = (valStr: string) => {
+    const targetAmt = Math.max(0, Number(valStr) || 0);
+
+    let rawSubTotal = 0;
+    let originalBillAmt = 0;
+
+    gridRows.forEach((r) => {
+      const baseLine = r.qty * r.rateUnit;
+      const dAmt = (baseLine * r.disPerc) / 100;
+      const lineTaxableOriginal = Math.max(0, baseLine - dAmt);
+      rawSubTotal += lineTaxableOriginal;
+
+      const gstRateDecimal = (r.sgstPerc + r.cgstPerc) / 100;
+      const lineTotalOriginal = lineTaxableOriginal * (1 + gstRateDecimal);
+      originalBillAmt += lineTotalOriginal;
+    });
+
+    const neededDisc = Math.max(0, originalBillAmt - targetAmt);
+    setCashDisc(Number(neededDisc.toFixed(2)));
+
+    const perc = rawSubTotal > 0 ? (neededDisc * 100) / rawSubTotal : 0;
+    setCashDiscPerc(Number(perc.toFixed(2)));
+  };
+
   // Calculations Summary - Reverse Tax Calculation from Final Received / Adjusted Amount
   const totals = useMemo(() => {
     let totalQty = 0;
@@ -1312,11 +1337,21 @@ export default function RetailSalePOSPage() {
                 />
               </div>
 
-              {/* BIG BRIGHT GREEN NET TOTAL DISPLAY BOX */}
-              <div className="bg-lime-500 text-slate-950 p-2 rounded text-right border-2 border-lime-600 shadow-inner mt-2">
-                <span className="text-2xl font-black font-mono tracking-tight">
-                  {totals.grandTotal.toFixed(2)}
-                </span>
+              {/* EDITABLE BIG BRIGHT GREEN FINAL RECEIVED AMOUNT BOX */}
+              <div className="bg-lime-500 text-slate-950 p-2 rounded border-2 border-lime-600 shadow-inner mt-2 space-y-1">
+                <div className="flex justify-between items-center text-[10px] font-black uppercase tracking-wider text-slate-950">
+                  <span>Net Received [Reverse Tax]</span>
+                  <span>₹</span>
+                </div>
+                <Input
+                  type="number"
+                  step="0.01"
+                  value={totals.grandTotal !== 0 ? totals.grandTotal : ""}
+                  onChange={(e) => handleFinalReceivedAmountChange(e.target.value)}
+                  placeholder="0.00"
+                  className="h-9 text-2xl font-black font-mono text-right bg-white text-slate-950 border-2 border-lime-700 shadow focus:ring-2 focus:ring-amber-500 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                  title="Edit Final Received Amount to trigger Reverse Tax Calculation"
+                />
               </div>
             </CardContent>
           </Card>
