@@ -247,11 +247,18 @@ export default function RetailPOSSalesReturnPage() {
         .ilike("bar_no", `%${query}%`);
 
       if (barRows && barRows.length > 0) {
-        if (barRows.length === 1) {
-          addStockItemToGrid(barRows[0]);
+        const soldRows = barRows.filter((b) => b.inv_no && String(b.inv_no).trim() !== "");
+        if (soldRows.length === 0) {
+          alert(`Invalid Return Error!\nBarcode item "${query}" has NOT been sold in Retail POS Sale. Unsold stock items cannot be returned.`);
+          setScanInput("");
+          return;
+        }
+
+        if (soldRows.length === 1) {
+          addStockItemToGrid(soldRows[0]);
           setScanInput("");
         } else {
-          setStockItems(barRows);
+          setStockItems(soldRows);
           setSelectedStockRowIndex(0);
           setIsStockModalOpen(true);
         }
@@ -281,8 +288,14 @@ function formatShortRefNarration(invNo?: string, dateStr?: string): string {
   return `SaleRefNo.${refNo},Dt${formattedDt}`;
 }
 
-  // Add Item to Return Grid with Duplicate Check & Short Narration
+  // Add Item to Return Grid with Unsold Item Restriction, Duplicate Check & Short Narration
   const addStockItemToGrid = (bar: any) => {
+    // Unsold Item Restriction: Item MUST have been sold in Retail POS Sale (inv_no must exist)
+    if (!bar.inv_no || String(bar.inv_no).trim() === "") {
+      alert(`Invalid Return Error!\nBarcode item "${bar.bar_no}" has NOT been sold in Retail POS Sale. Unsold stock items cannot be returned.`);
+      return;
+    }
+
     // Duplicate Check
     const alreadyAdded = gridRows.find(
       (r) => r.productCode.toUpperCase() === String(bar.bar_no).toUpperCase()
@@ -986,6 +999,8 @@ function formatShortRefNarration(invNo?: string, dateStr?: string): string {
                   .from("bar_temp")
                   .select("*")
                   .eq("frm_code", company.frm_code)
+                  .not("inv_no", "is", null)
+                  .neq("inv_no", "")
                   .limit(40);
                 if (data) {
                   setStockItems(data);
