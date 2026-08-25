@@ -164,15 +164,15 @@ export default function RetailPOSSalesReturnPage() {
       }
       setProductTaxMap(map);
 
-      // 2. Fetch distinct saved return invoice numbers (POS-SR-%)
+      // 2. Fetch distinct saved return invoice numbers (POS-SR-%) from category
       const { data: retRows } = await supabase
         .from("bar_temp")
-        .select("inv_no")
+        .select("category")
         .eq("frm_code", company.frm_code)
-        .ilike("inv_no", "POS-SR-%");
+        .ilike("category", "POS-SR-%");
 
       const distinctInvoices = Array.from(
-        new Set(retRows?.map((r) => r.inv_no).filter(Boolean) || [])
+        new Set(retRows?.map((r) => r.category).filter(Boolean) || [])
       ).sort();
 
       setSavedReturnInvoices(distinctInvoices);
@@ -516,7 +516,7 @@ export default function RetailPOSSalesReturnPage() {
           .from("bar_temp")
           .select("bar_no")
           .eq("frm_code", company.frm_code)
-          .eq("inv_no", returnInvoiceNo);
+          .eq("category", returnInvoiceNo);
 
         if (existing && existing.length > 0) {
           alert(
@@ -527,15 +527,14 @@ export default function RetailPOSSalesReturnPage() {
         }
       }
 
-      // Stock Inwarding & Saved Return Record Persistence
+      // Stock Inwarding & Saved Return Record Persistence (original inv_no remains untouched!)
       const barcodeList = gridRows.map((r) => r.productCode).filter(Boolean);
       if (barcodeList.length > 0) {
         await supabase
           .from("bar_temp")
           .update({
             sold_status: "A", // Inward stock back to Available stock list!
-            inv_no: returnInvoiceNo, // "POS-SR-000001" -> Persists saved return invoice record!
-            inv_date: returnInvoiceDate,
+            category: returnInvoiceNo, // Stores return sequence 'POS-SR-000001' while leaving original inv_no untouched!
             margin: Number(cashDisc.toFixed(2)),
           })
           .in("bar_no", barcodeList)
@@ -580,7 +579,7 @@ export default function RetailPOSSalesReturnPage() {
           .from("bar_temp")
           .update({
             sold_status: "S",
-            inv_no: returnInvoiceNo,
+            category: null,
           })
           .in("bar_no", barcodeList)
           .eq("frm_code", company.frm_code);
@@ -751,7 +750,7 @@ export default function RetailPOSSalesReturnPage() {
         .from("bar_temp")
         .select("*")
         .eq("frm_code", company.frm_code)
-        .eq("inv_no", invNo)
+        .eq("category", invNo)
         .order("bar_ref_id", { ascending: true });
 
       if (error || !items || items.length === 0) {
