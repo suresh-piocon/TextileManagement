@@ -887,7 +887,6 @@ export default function RetailSalePOSPage() {
         .from("bar_temp")
         .select("*")
         .eq("frm_code", company.frm_code)
-        .eq("sold_status", "S")
         .eq("inv_no", invNo)
         .order("bar_ref_id", { ascending: true });
 
