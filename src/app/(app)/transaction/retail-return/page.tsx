@@ -595,7 +595,7 @@ function formatShortRefNarration(invNo?: string, dateStr?: string): string {
         await supabase
           .from("bar_temp")
           .update({
-            sold_status: "S",
+            sold_status: "A", // Ensure stock item is added to Batch Stock list to sell again!
             category: null,
           })
           .in("bar_no", barcodeList)
