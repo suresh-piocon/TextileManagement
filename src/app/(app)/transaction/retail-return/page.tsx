@@ -264,7 +264,24 @@ export default function RetailPOSSalesReturnPage() {
     }
   };
 
-  // Add Item to Return Grid with Duplicate Check & Cash Sale Narration
+function formatShortRefNarration(invNo?: string, dateStr?: string): string {
+  const refNo = invNo || "POS-000001";
+  let formattedDt = "25-08-26";
+  if (dateStr) {
+    const raw = dateStr.split("T")[0];
+    const parts = raw.split("-");
+    if (parts.length === 3) {
+      if (parts[0].length === 4) {
+        formattedDt = `${parts[2]}-${parts[1]}-${parts[0].slice(-2)}`;
+      } else {
+        formattedDt = raw;
+      }
+    }
+  }
+  return `SaleRefNo.${refNo},Dt${formattedDt}`;
+}
+
+  // Add Item to Return Grid with Duplicate Check & Short Narration
   const addStockItemToGrid = (bar: any) => {
     // Duplicate Check
     const alreadyAdded = gridRows.find(
@@ -281,8 +298,8 @@ export default function RetailPOSSalesReturnPage() {
     const gstPerc = taxInfo.gstPerc || 5;
     const halfTax = gstPerc / 2;
 
-    // Narration format in Invoice Details column: POS-000001 (24-08-2026) Cash Sale
-    const invRefStr = `${bar.inv_no || "POS-000001"} (${bar.inv_date || returnInvoiceDate}) Cash Sale`;
+    // Short Narration format: SaleRefNo.POS-000001,Dt25-08-26
+    const invRefStr = formatShortRefNarration(bar.inv_no, bar.inv_date || returnInvoiceDate);
 
     const newRow: POSReturnGridRow = {
       id: `pos-ret-${bar.bar_no}-${Date.now()}`,
@@ -777,7 +794,7 @@ export default function RetailPOSSalesReturnPage() {
           prcode: bar.prcode || 101,
           productName: `${bar.grp_name || "Sarees"}-${taxInfo.hsnCode}`,
           hsnCode: taxInfo.hsnCode,
-          invoiceDetails: `${invNo} (${bar.inv_date || returnInvoiceDate}) Cash Sale`,
+          invoiceDetails: formatShortRefNarration(bar.inv_no || invNo, bar.inv_date || returnInvoiceDate),
           qty: bar.qty || 1,
           unitName: bar.unit_name || "PCS",
           mrp: saleRateMrp,
