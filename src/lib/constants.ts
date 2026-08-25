@@ -139,7 +139,7 @@ export const MENU_ITEMS: MenuItem[] = [
       { id: "purchase-return", label: "Purchase Return", icon: "RotateCcw", href: "/transaction/purchase-return" },
       { id: "estimate", label: "Estimate", icon: "FileText", href: "/transaction/estimate" },
       { id: "retail-sale", label: "Retail Sale (POS)", icon: "Store", href: "/transaction/retail-sale" },
-      { id: "retail-return", label: "Retail Return", icon: "PackageX", href: "/transaction/retail-return" },
+      { id: "retail-return", label: "Retail POS Sales Return", icon: "PackageX", href: "/transaction/retail-return" },
       { id: "delivery-challan", label: "Delivery Challan", icon: "Truck", href: "/transaction/delivery-challan" },
       { id: "wholesale", label: "Wholesale Invoice", icon: "Building2", href: "/transaction/wholesale" },
       { id: "wholesale-return", label: "Wholesale Return", icon: "Undo2", href: "/transaction/wholesale-return" },
