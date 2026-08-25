@@ -40,12 +40,10 @@ interface POSReturnGridRow {
   invoiceDetails: string;
   qty: number;
   unitName: string;
-  unit2: number;
   mrp: number;
   rateUnit: number;
   amount: number;
   disPerc: number;
-  dis2Perc: number;
   sgstPerc: number;
   cgstPerc: number;
   igstPerc: number;
@@ -166,7 +164,7 @@ export default function RetailPOSSalesReturnPage() {
       }
       setProductTaxMap(map);
 
-      // 2. Fetch distinct saved return invoice numbers
+      // 2. Fetch distinct saved return invoice numbers (POS-SR-%)
       const { data: retRows } = await supabase
         .from("bar_temp")
         .select("inv_no")
@@ -231,12 +229,12 @@ export default function RetailPOSSalesReturnPage() {
     const query = (inputVal || scanInput).trim().toUpperCase();
     if (!query || !company?.frm_code) return;
 
-    // Check if barcode is already added to return grid
+    // Duplicate Check: Check if barcode is already added in grid
     const alreadyAdded = gridRows.find(
       (r) => r.productCode.toUpperCase() === query
     );
     if (alreadyAdded) {
-      alert(`Barcode "${query}" is already added to this return invoice!`);
+      alert(`Duplicate Stock Item Error!\nBarcode item "${query}" is already entered in this Sales Return invoice.`);
       setScanInput("");
       return;
     }
@@ -266,17 +264,25 @@ export default function RetailPOSSalesReturnPage() {
     }
   };
 
-  // Add Item to Return Grid
+  // Add Item to Return Grid with Duplicate Check & Cash Sale Narration
   const addStockItemToGrid = (bar: any) => {
+    // Duplicate Check
+    const alreadyAdded = gridRows.find(
+      (r) => r.productCode.toUpperCase() === String(bar.bar_no).toUpperCase()
+    );
+    if (alreadyAdded) {
+      alert(`Duplicate Stock Item Error!\nBarcode item "${bar.bar_no}" is already entered in this Sales Return invoice.`);
+      return;
+    }
+
     const saleRateMrp = Number(bar.pc_sale_rate || bar.tag_rate || 2000);
     const prcodeStr = String(bar.prcode || 101);
     const taxInfo = productTaxMap.get(prcodeStr) || { gstPerc: 5, hsnCode: "50079010" };
     const gstPerc = taxInfo.gstPerc || 5;
     const halfTax = gstPerc / 2;
 
-    const invRefStr = bar.inv_no
-      ? `Ref: ${bar.inv_no} SNo: ${bar.sno || 1} Dt: ${bar.inv_date || returnInvoiceDate}`
-      : `Ref: Cash Sale Dt: ${returnInvoiceDate}`;
+    // Narration format in Invoice Details column: POS-000001 (24-08-2026) Cash Sale
+    const invRefStr = `${bar.inv_no || "POS-000001"} (${bar.inv_date || returnInvoiceDate}) Cash Sale`;
 
     const newRow: POSReturnGridRow = {
       id: `pos-ret-${bar.bar_no}-${Date.now()}`,
@@ -289,12 +295,10 @@ export default function RetailPOSSalesReturnPage() {
       invoiceDetails: invRefStr,
       qty: 1,
       unitName: bar.unit_name || "PCS",
-      unit2: 1.0,
       mrp: saleRateMrp,
       rateUnit: saleRateMrp,
       amount: saleRateMrp,
       disPerc: 0,
-      dis2Perc: 0,
       sgstPerc: halfTax,
       cgstPerc: halfTax,
       igstPerc: 0,
@@ -492,7 +496,7 @@ export default function RetailPOSSalesReturnPage() {
     return Math.max(0, totals.grandTotal - totalPaidAmount);
   }, [totals.grandTotal, totalPaidAmount]);
 
-  // Confirm & Save POS Sales Return with Inwarding & Duplicate Check
+  // Confirm & Save POS Sales Return (Stock Inwarding & Record Persistence)
   const handleFinalSaveInvoice = async () => {
     if (!company?.frm_code) return;
 
@@ -523,14 +527,14 @@ export default function RetailPOSSalesReturnPage() {
         }
       }
 
-      // Stock Inwarding: Return barcode items back to Available stock ('A')
+      // Stock Inwarding & Saved Return Record Persistence
       const barcodeList = gridRows.map((r) => r.productCode).filter(Boolean);
       if (barcodeList.length > 0) {
         await supabase
           .from("bar_temp")
           .update({
-            sold_status: "A",
-            inv_no: null,
+            sold_status: "A", // Inward stock back to Available stock list!
+            inv_no: returnInvoiceNo, // "POS-SR-000001" -> Persists saved return invoice record!
             inv_date: returnInvoiceDate,
             margin: Number(cashDisc.toFixed(2)),
           })
@@ -733,7 +737,7 @@ export default function RetailPOSSalesReturnPage() {
     printWin.document.close();
   };
 
-  // Load Saved Sales Return Record by invNo
+  // Load Saved Sales Return Record by invNo (Previous / Next)
   const loadSavedInvoiceRecord = async (invNo: string) => {
     if (!invNo || !company?.frm_code) return;
     setLoading(true);
@@ -774,15 +778,13 @@ export default function RetailPOSSalesReturnPage() {
           prcode: bar.prcode || 101,
           productName: `${bar.grp_name || "Sarees"}-${taxInfo.hsnCode}`,
           hsnCode: taxInfo.hsnCode,
-          invoiceDetails: `Ref: Saved Return SNo: ${idx + 1}`,
+          invoiceDetails: `${invNo} (${bar.inv_date || returnInvoiceDate}) Cash Sale`,
           qty: bar.qty || 1,
           unitName: bar.unit_name || "PCS",
-          unit2: 1.0,
           mrp: saleRateMrp,
           rateUnit: saleRateMrp,
           amount: (bar.qty || 1) * saleRateMrp,
           disPerc: 0,
-          dis2Perc: 0,
           sgstPerc: halfTax,
           cgstPerc: halfTax,
           igstPerc: 0,
@@ -1002,14 +1004,12 @@ export default function RetailPOSSalesReturnPage() {
                     <TableHead className="w-8 text-center p-1 font-bold">S...</TableHead>
                     <TableHead className="w-20 p-1 font-bold">Product Code</TableHead>
                     <TableHead className="min-w-[150px] p-1 font-bold">Product Name [Shift + F7]</TableHead>
-                    <TableHead className="min-w-[140px] p-1 font-bold">Invoice Details</TableHead>
+                    <TableHead className="min-w-[160px] p-1 font-bold">Invoice Details</TableHead>
                     <TableHead className="w-12 text-right p-1 font-bold">Qty</TableHead>
                     <TableHead className="w-16 text-center p-1 font-bold">Unit Name</TableHead>
-                    <TableHead className="w-14 text-right p-1 font-bold">Unit-2</TableHead>
                     <TableHead className="w-20 text-right p-1 font-bold">Rate/Unit</TableHead>
                     <TableHead className="w-20 text-right p-1 font-bold">Amount</TableHead>
                     <TableHead className="w-12 text-right p-1 font-bold">Dis %</TableHead>
-                    <TableHead className="w-12 text-right p-1 font-bold">Dis-2%</TableHead>
                     <TableHead className="w-12 text-right p-1 font-bold">SGST</TableHead>
                     <TableHead className="w-12 text-right p-1 font-bold">CGST</TableHead>
                     <TableHead className="w-28 text-right p-1 font-bold text-red-700 dark:text-red-400">Net Amount</TableHead>
@@ -1019,7 +1019,7 @@ export default function RetailPOSSalesReturnPage() {
                 <TableBody className="text-xs font-mono">
                   {gridRows.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={15} className="text-center p-12 text-slate-400 font-bold">
+                      <TableCell colSpan={13} className="text-center p-12 text-slate-400 font-bold">
                         Scan Customer Returned Saree Barcode or Product Code above to add to Sales Return invoice.
                       </TableCell>
                     </TableRow>
@@ -1051,7 +1051,7 @@ export default function RetailPOSSalesReturnPage() {
                           <TableCell className="p-1 font-bold bg-amber-500 text-slate-950 px-2 rounded">
                             {row.productName}
                           </TableCell>
-                          <TableCell className="p-1 text-slate-600 text-[11px] truncate">
+                          <TableCell className="p-1 text-slate-700 dark:text-slate-200 text-[11px] font-semibold truncate">
                             {row.invoiceDetails}
                           </TableCell>
                           <TableCell className="p-1 text-right">
@@ -1065,9 +1065,6 @@ export default function RetailPOSSalesReturnPage() {
                           <TableCell className="p-1 text-center font-bold text-slate-700">
                             {row.unitName}
                           </TableCell>
-                          <TableCell className="p-1 text-right font-medium">
-                            {row.unit2.toFixed(3)}
-                          </TableCell>
                           <TableCell className="p-1 text-right font-bold">
                             <Input
                               type="number"
@@ -1080,7 +1077,6 @@ export default function RetailPOSSalesReturnPage() {
                             {row.amount.toFixed(2)}
                           </TableCell>
                           <TableCell className="p-1 text-right">{row.disPerc}</TableCell>
-                          <TableCell className="p-1 text-right">{row.dis2Perc}</TableCell>
                           <TableCell className="p-1 text-right font-bold text-slate-600">
                             {row.sgstPerc.toFixed(2)}
                           </TableCell>
@@ -1098,12 +1094,11 @@ export default function RetailPOSSalesReturnPage() {
               </Table>
             </div>
 
-            {/* Grid Summary Footer Line (Matching Reference Image) */}
+            {/* Grid Summary Footer Line */}
             <div className="bg-slate-100 dark:bg-slate-800 p-1.5 flex items-center justify-between font-mono font-bold text-xs border-t">
               <span className="w-8 text-center">{gridRows.length}</span>
               <div className="flex gap-6 text-right">
                 <span className="w-12">{totals.totalQty.toFixed(2)}</span>
-                <span className="w-14">1.000</span>
                 <span className="w-20 text-slate-900 dark:text-white">
                   {totals.subTotal.toFixed(2)}
                 </span>
@@ -1291,16 +1286,9 @@ export default function RetailPOSSalesReturnPage() {
         </div>
       </div>
 
-      {/* BOTTOM ACTION BUTTONS TOOLBAR */}
+      {/* BOTTOM ACTION BUTTONS TOOLBAR (Save button removed; record saved inside Payment Details [F8]) */}
       <div className="bg-white dark:bg-slate-800 p-1.5 rounded border flex flex-wrap items-center justify-between gap-2 shadow-sm">
         <div className="flex flex-wrap items-center gap-1.5">
-          <Button
-            size="sm"
-            className="h-7 text-xs bg-amber-600 text-white hover:bg-amber-700 font-bold border shadow px-4"
-            onClick={handleFinalSaveInvoice}
-          >
-            Save [F10]
-          </Button>
           <Button
             size="sm"
             className="h-7 text-xs bg-slate-200 text-slate-900 hover:bg-slate-300 font-bold border"
@@ -1323,10 +1311,10 @@ export default function RetailPOSSalesReturnPage() {
           </Button>
           <Button
             size="sm"
-            className="h-7 text-xs bg-amber-600 text-white hover:bg-amber-700 font-bold border shadow"
+            className="h-7 text-xs bg-amber-600 text-white hover:bg-amber-700 font-bold border shadow px-4"
             onClick={handleOpenPaymentModal}
           >
-            Payment Details
+            Payment Details [F8]
           </Button>
           <Button
             size="sm"
