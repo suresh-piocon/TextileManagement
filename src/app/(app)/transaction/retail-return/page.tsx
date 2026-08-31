@@ -239,79 +239,104 @@ export default function RetailPOSSalesReturnPage() {
       }
       setProductTaxMap(map);
 
-      // 2. Fetch Sold Items from retail_sale_child & bar_temp
-      const [childRes, barRes] = await Promise.all([
-        supabase
-          .from("retail_sale_child")
-          .select("*, retail_sale_mast(*), product(*)")
-          .eq("frm_code", company.frm_code)
-          .order("dc_ref_no", { ascending: false }),
-        supabase
-          .from("bar_temp")
-          .select("*, product(*)")
-          .eq("frm_code", company.frm_code)
-          .or("sold_status.eq.S,inv_no.not.is.null")
-          .order("bar_ref_id", { ascending: false })
-      ]);
+      // 2. Fetch All Barcodes from bar_temp to inspect current stock sold_status
+      const { data: allBars } = await supabase
+        .from("bar_temp")
+        .select("*")
+        .eq("frm_code", company.frm_code);
 
-      const soldList: SoldItem[] = [];
-      const seenBarcodes = new Set<string>();
-
-      if (childRes.data && childRes.data.length > 0) {
-        childRes.data.forEach((c: any) => {
-          const barNo = c.dc_bar_no || "";
-          if (barNo && !seenBarcodes.has(barNo)) {
-            seenBarcodes.add(barNo);
-            const prd = c.product;
-            const mast = c.retail_sale_mast || {};
-            const prcodeStr = String(c.dc_prcode || prd?.ref_no || 1);
-            const taxInfo = map.get(prcodeStr) || {
-              refNo: c.dc_prcode || 1,
-              prdCode: "101",
-              prdName: prd?.prd_name || "SAREES",
-              gstPerc: 5,
-              hsnCode: prd?.hsn_code || "50079010",
-              units: prd?.units || "NOS",
-              grpCode: 1,
-            };
-
-            const qty = Number(c.dc_qty || 1);
-            const rate = Number(c.dc_rate || 0);
-            const taxable = Number(c.dc_net_tot || (qty * rate));
-            const cgst = Number(c.dc_cgst_perc || taxInfo.gstPerc / 2 || 2.5);
-            const sgst = Number(c.dc_sgst_perc || taxInfo.gstPerc / 2 || 2.5);
-            const totTax = (taxable * (cgst + sgst)) / 100;
-            const netAmt = taxable + totTax;
-
-            soldList.push({
-              id: `sold-child-${c.dc_ref_no}`,
-              batchNo: barNo,
-              productCode: barNo,
-              productName: prd?.prd_name || taxInfo.prdName || `SAREES-${taxInfo.hsnCode}`,
-              hsnCode: taxInfo.hsnCode,
-              outwardQty: qty,
-              outwardDate: mast.rm_bill_date ? String(mast.rm_bill_date).split("T")[0] : (c.rm_bill_date ? String(c.rm_bill_date).split("T")[0] : new Date().toISOString().split("T")[0]),
-              invNo: mast.rm_bill_ref_no || c.rm_bill_no || "POS-000001",
-              taxableAmt: taxable,
-              netAmount: netAmt,
-              customerName: mast.cust_name || "Cash Customer",
-              unitName: prd?.units || taxInfo.units || "NOS",
-              rateUnit: rate,
-              disPerc: 0,
-              sgstPerc: sgst,
-              cgstPerc: cgst,
-              igstPerc: Number(c.dc_igst_perc || 0),
-              prcode: taxInfo.refNo || c.dc_prcode || 1,
-            });
+      const barStatusMap = new Map<string, any>();
+      if (allBars) {
+        allBars.forEach((b) => {
+          if (b.bar_no) {
+            barStatusMap.set(String(b.bar_no).trim().toUpperCase(), b);
           }
         });
       }
 
-      if (barRes.data && barRes.data.length > 0) {
-        barRes.data.forEach((b: any) => {
-          const barNo = b.bar_no || "";
-          if (barNo && !seenBarcodes.has(barNo) && (b.sold_status === "S" || (b.inv_no && String(b.inv_no).trim() !== ""))) {
-            seenBarcodes.add(barNo);
+      // Fetch Sold Items from retail_sale_child (linked to Retail Sale invoices POS-XXXXXX)
+      const { data: childData } = await supabase
+        .from("retail_sale_child")
+        .select("*, retail_sale_mast(*), product(*)")
+        .eq("frm_code", company.frm_code)
+        .order("dc_ref_no", { ascending: false });
+
+      const soldList: SoldItem[] = [];
+      const seenBarcodes = new Set<string>();
+
+      if (childData && childData.length > 0) {
+        childData.forEach((c: any) => {
+          const barNo = String(c.dc_bar_no || "").trim();
+          if (!barNo || seenBarcodes.has(barNo.toUpperCase())) return;
+
+          const mast = c.retail_sale_mast || {};
+          const invNo = String(mast.rm_bill_ref_no || c.rm_bill_no || "").trim();
+
+          // Strictly require Retail POS Sales Invoice (e.g. POS-000001)
+          if (!invNo.toUpperCase().startsWith("POS-")) return;
+
+          // Check if this item is currently available ('A') in stock (i.e. already returned or unsold)
+          const curBar = barStatusMap.get(barNo.toUpperCase());
+          if (curBar && curBar.sold_status !== "S") {
+            return; // Item is already returned / in stock, do not show in Sold Items
+          }
+
+          seenBarcodes.add(barNo.toUpperCase());
+          const prd = c.product;
+          const prcodeStr = String(c.dc_prcode || prd?.ref_no || 1);
+          const taxInfo = map.get(prcodeStr) || {
+            refNo: c.dc_prcode || 1,
+            prdCode: "101",
+            prdName: prd?.prd_name || "SAREES",
+            gstPerc: 5,
+            hsnCode: prd?.hsn_code || "50079010",
+            units: prd?.units || "NOS",
+            grpCode: 1,
+          };
+
+          const qty = Number(c.dc_qty || 1);
+          const rate = Number(c.dc_rate || 0);
+          const taxable = Number(c.dc_net_tot || (qty * rate));
+          const cgst = Number(c.dc_cgst_perc || taxInfo.gstPerc / 2 || 2.5);
+          const sgst = Number(c.dc_sgst_perc || taxInfo.gstPerc / 2 || 2.5);
+          const totTax = (taxable * (cgst + sgst)) / 100;
+          const netAmt = taxable + totTax;
+
+          soldList.push({
+            id: `sold-child-${c.dc_ref_no}`,
+            batchNo: barNo,
+            productCode: barNo,
+            productName: prd?.prd_name || taxInfo.prdName || `SAREES-${taxInfo.hsnCode}`,
+            hsnCode: taxInfo.hsnCode,
+            outwardQty: qty,
+            outwardDate: mast.rm_bill_date ? String(mast.rm_bill_date).split("T")[0] : (c.rm_bill_date ? String(c.rm_bill_date).split("T")[0] : new Date().toISOString().split("T")[0]),
+            invNo: invNo || "POS-000001",
+            taxableAmt: taxable,
+            netAmount: netAmt,
+            customerName: mast.cust_name || "Cash Customer",
+            unitName: prd?.units || taxInfo.units || "NOS",
+            rateUnit: rate,
+            disPerc: 0,
+            sgstPerc: sgst,
+            cgstPerc: cgst,
+            igstPerc: Number(c.dc_igst_perc || 0),
+            prcode: taxInfo.refNo || c.dc_prcode || 1,
+          });
+        });
+      }
+
+      // Also check bar_temp ONLY for records explicitly marked sold ('S') with a POS- invoice
+      if (allBars) {
+        allBars.forEach((b: any) => {
+          const barNo = String(b.bar_no || "").trim();
+          const invNo = String(b.inv_no || "").trim();
+          if (
+            barNo &&
+            !seenBarcodes.has(barNo.toUpperCase()) &&
+            b.sold_status === "S" &&
+            invNo.toUpperCase().startsWith("POS-")
+          ) {
+            seenBarcodes.add(barNo.toUpperCase());
             const prd = b.product;
             const prcodeStr = String(b.prcode || prd?.ref_no || 1);
             const taxInfo = map.get(prcodeStr) || {
@@ -339,7 +364,7 @@ export default function RetailPOSSalesReturnPage() {
               hsnCode: taxInfo.hsnCode,
               outwardQty: qty,
               outwardDate: b.inv_date ? String(b.inv_date).split("T")[0] : (b.bar_date || new Date().toISOString().split("T")[0]),
-              invNo: b.inv_no || "POS-000001",
+              invNo: invNo || "POS-000001",
               taxableAmt: taxable,
               netAmount: netAmt,
               customerName: "Cash Customer",
@@ -361,38 +386,74 @@ export default function RetailPOSSalesReturnPage() {
       const [retMastRes, barTempRetRes] = await Promise.all([
         supabase
           .from("retail_sale_ret_mast")
-          .select("*, retail_sale_ret_child(*, product(*))")
+          .select("*, retail_sale_ret_child(*)")
           .eq("rr_frm_code", company.frm_code)
           .order("rr_ref_no", { ascending: false }),
         supabase
           .from("bar_temp")
-          .select("category")
+          .select("*")
           .eq("frm_code", company.frm_code)
           .ilike("category", "POS-SR-%")
       ]);
 
-      const savedList: any[] = retMastRes.data ? [...retMastRes.data] : [];
-      const seenInvNos = new Set(savedList.map((s) => s.rr_bill_ref_no).filter(Boolean));
+      const savedList: any[] = [];
+      const seenInvNos = new Set<string>();
 
-      // Add any distinct invoices from bar_temp category if not already in retail_sale_ret_mast
-      if (barTempRetRes.data) {
-        const catInvoices = Array.from(
-          new Set(barTempRetRes.data.map((r) => r.category).filter(Boolean))
-        );
-        catInvoices.forEach((invNo) => {
-          if (!seenInvNos.has(invNo)) {
-            seenInvNos.add(invNo);
+      if (retMastRes.data && retMastRes.data.length > 0) {
+        retMastRes.data.forEach((inv) => {
+          const invNo = String(inv.rr_bill_ref_no || "").trim();
+          if (invNo) seenInvNos.add(invNo.toUpperCase());
+          savedList.push(inv);
+        });
+      }
+
+      // Add any distinct return invoices from bar_temp category if not already in retail_sale_ret_mast
+      if (barTempRetRes.data && barTempRetRes.data.length > 0) {
+        const catGroups = new Map<string, any[]>();
+        barTempRetRes.data.forEach((b: any) => {
+          const cat = String(b.category || "").trim();
+          if (cat.toUpperCase().startsWith("POS-SR-")) {
+            const upperCat = cat.toUpperCase();
+            if (!catGroups.has(upperCat)) catGroups.set(upperCat, []);
+            catGroups.get(upperCat)!.push(b);
+          }
+        });
+
+        catGroups.forEach((items, upperCat) => {
+          if (!seenInvNos.has(upperCat)) {
+            seenInvNos.add(upperCat);
+            let totQty = 0;
+            let totTaxable = 0;
+            let totTax = 0;
+            let totNet = 0;
+            let invDate = new Date().toISOString().split("T")[0];
+            const originalCat = items[0]?.category || upperCat;
+
+            items.forEach((item) => {
+              const q = Number(item.qty || 1);
+              const r = Number(item.pc_sale_rate || item.tag_rate || 2000);
+              const taxInfo = map.get(String(item.prcode || 101)) || { gstPerc: 5 };
+              const lineTaxable = q * r;
+              const lineTax = (lineTaxable * (taxInfo.gstPerc || 5)) / 100;
+              totQty += q;
+              totTaxable += lineTaxable;
+              totTax += lineTax;
+              totNet += lineTaxable + lineTax;
+              if (item.inv_date) invDate = String(item.inv_date).split("T")[0];
+              else if (item.bar_date) invDate = String(item.bar_date).split("T")[0];
+            });
+
             savedList.push({
               rr_ref_no: 0,
-              rr_bill_ref_no: invNo,
-              rr_bill_date: new Date().toISOString().split("T")[0],
+              rr_bill_ref_no: originalCat,
+              rr_bill_date: invDate,
               cust_name: "Cash Customer",
               rr_ph_no: "-",
-              rr_tot_qty: 1,
-              rr_bf_gst_amt: 0,
-              rr_cgst_amt: 0,
-              rr_sgst_amt: 0,
-              rr_net_total: 0,
+              rr_tot_qty: totQty,
+              rr_bf_gst_amt: totTaxable,
+              rr_cgst_amt: totTax / 2,
+              rr_sgst_amt: totTax / 2,
+              rr_net_total: totNet,
               rr_mode_one: "CASH",
               fromBarTempOnly: true,
             });
@@ -400,7 +461,7 @@ export default function RetailPOSSalesReturnPage() {
         });
       }
 
-      // Sort strictly in Descending Order (latest invoice number / sequence on top)
+      // Sort strictly in Descending Order (latest return invoice on top)
       savedList.sort((a, b) => {
         const numA = parseInt(String(a.rr_bill_ref_no || "").replace(/\D+/g, "") || "0");
         const numB = parseInt(String(b.rr_bill_ref_no || "").replace(/\D+/g, "") || "0");
