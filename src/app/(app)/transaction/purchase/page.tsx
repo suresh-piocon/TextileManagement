@@ -237,13 +237,31 @@ function PurchaseTransactionContent() {
     try {
       setLoading(true);
 
-      // 1. Delete barcodes from bar_temp
+      // 1. Delete barcodes from bar_temp matching all possible invoice identifiers
       if (company?.frm_code) {
-        await supabase
-          .from('bar_temp')
-          .delete()
-          .eq('frm_code', company.frm_code)
-          .eq('inv_no', targetInvNo);
+        const invNoList = Array.from(new Set([
+          targetInv.pm_bill_ref_no,
+          String(targetInv.pm_ref_no),
+          targetInv.pm_rec_no ? String(targetInv.pm_rec_no) : null,
+          invoiceNo
+        ].filter(Boolean)));
+
+        if (invNoList.length > 0) {
+          await supabase
+            .from('bar_temp')
+            .delete()
+            .eq('frm_code', company.frm_code)
+            .in('inv_no', invNoList as string[]);
+        }
+
+        if (targetInv.pm_cr_code) {
+          await supabase
+            .from('bar_temp')
+            .delete()
+            .eq('frm_code', company.frm_code)
+            .eq('cr_code', targetInv.pm_cr_code)
+            .is('inv_no', null);
+        }
       }
 
       // 2. Delete pur_mast (cascades to pur_child & pur_expenses)
@@ -625,7 +643,8 @@ function PurchaseTransactionContent() {
 
         await supabase.from('pur_child').delete().eq('pm_ref_no', pmRefNo);
         await supabase.from('pur_expenses').delete().eq('pm_ref_no', pmRefNo);
-        await supabase.from('bar_temp').delete().eq('frm_code', company.frm_code).eq('inv_no', invoiceNo);
+        const editInvNos = Array.from(new Set([invoices[currentIndex]?.pm_bill_ref_no, String(pmRefNo), invoiceNo].filter(Boolean)));
+        await supabase.from('bar_temp').delete().eq('frm_code', company.frm_code).in('inv_no', editInvNos as string[]);
       } else {
         const { data: newMast, error } = await supabase.from('pur_mast').insert([mastPayload]).select('pm_ref_no').single();
         if (error) throw error;

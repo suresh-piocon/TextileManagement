@@ -612,7 +612,6 @@ export default function RetailSalePOSPage() {
           .from("bar_temp")
           .update({
             sold_status: "S",
-            inv_no: invoiceNo,
             inv_date: invoiceDate,
             margin: Number(cashDisc.toFixed(2)),
           })
@@ -659,11 +658,11 @@ export default function RetailSalePOSPage() {
     try {
       const barcodeList = gridRows.map((r) => r.productCode).filter(Boolean);
       if (barcodeList.length > 0) {
+        // Return sold items back to Available stock ('A') without erasing original purchase inv_no if present
         await supabase
           .from("bar_temp")
           .update({
             sold_status: "A",
-            inv_no: null,
           })
           .in("bar_no", barcodeList)
           .eq("frm_code", company.frm_code);

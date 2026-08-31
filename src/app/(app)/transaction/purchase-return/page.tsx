@@ -885,6 +885,32 @@ export default function PurchaseReturnPage() {
 
     setLoading(true);
     try {
+      // 1. Restore returned barcodes back to Available ('A') status in stock
+      const { data: childData } = await supabase
+        .from("pur_ret_child")
+        .select("prc_prcode")
+        .eq("prm_ref_no", rec.prm_ref_no);
+
+      const prCodes = (childData || []).map((c: any) => c.prc_prcode).filter(Boolean);
+      const gridBarcodes = gridRows.map((r) => r.barcodeNo).filter(Boolean);
+
+      if (gridBarcodes.length > 0 && company?.frm_code) {
+        await supabase
+          .from("bar_temp")
+          .update({ sold_status: "A" })
+          .in("bar_no", gridBarcodes)
+          .eq("frm_code", company.frm_code);
+      } else if (prCodes.length > 0 && company?.frm_code && rec.prm_cr_code) {
+        await supabase
+          .from("bar_temp")
+          .update({ sold_status: "A" })
+          .in("prcode", prCodes)
+          .eq("cr_code", rec.prm_cr_code)
+          .eq("sold_status", "PR")
+          .eq("frm_code", company.frm_code);
+      }
+
+      // 2. Delete child and master records
       await supabase
         .from("pur_ret_child")
         .delete()
