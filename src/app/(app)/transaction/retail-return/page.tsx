@@ -1002,7 +1002,7 @@ export default function RetailPOSSalesReturnPage() {
     }
   };
 
-  // Delete POS Sales Return Record (Delete [F9])
+  // Delete POS Sales Return Record (Delete [F9]) - Updates Stock to Available ('A') so it lists in Retail Sale (POS)
   const handleDeleteInvoice = async () => {
     if (!company?.frm_code) return;
 
@@ -1011,7 +1011,7 @@ export default function RetailPOSSalesReturnPage() {
       return;
     }
 
-    if (!confirm(`Are you sure you want to delete POS Sales Return ${returnInvoiceNo}?`)) {
+    if (!confirm(`Are you sure you want to delete Retail POS Sales Return ${returnInvoiceNo}?`)) {
       return;
     }
 
@@ -1019,11 +1019,13 @@ export default function RetailPOSSalesReturnPage() {
     try {
       const barcodeList = gridRows.map((r) => r.productCode).filter(Boolean);
       if (barcodeList.length > 0) {
+        // When Retail POS Sales Return is deleted, add the items back into available stock list ('A')
         await supabase
           .from("bar_temp")
           .update({
-            sold_status: "S", // Revert back to Sold
+            sold_status: "A", // Added back into available stock list!
             category: null,
+            inv_no: null, // Clear sales reference so it can be sold fresh in Retail Sale (POS)
           })
           .in("bar_no", barcodeList)
           .eq("frm_code", company.frm_code);
@@ -1033,9 +1035,16 @@ export default function RetailPOSSalesReturnPage() {
         const rrRefNo = savedReturnInvoices[currentIndex].rr_ref_no;
         await supabase.from("retail_sale_ret_child").delete().eq("rr_ref_no", rrRefNo);
         await supabase.from("retail_sale_ret_mast").delete().eq("rr_ref_no", rrRefNo);
+      } else {
+        await supabase
+          .from("retail_sale_ret_mast")
+          .delete()
+          .eq("rr_bill_ref_no", returnInvoiceNo)
+          .eq("rr_frm_code", company.frm_code);
       }
 
-      alert(`POS Sales Return ${returnInvoiceNo} deleted successfully!`);
+      alert(`Retail POS Sales Return ${returnInvoiceNo} deleted successfully!\nItem(s) added back to Retail POS Sale stock list.`);
+      fetchInitialData();
       handleResetForm();
     } catch (e: any) {
       console.error("Delete error:", e);
