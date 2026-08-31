@@ -1,7 +1,8 @@
 'use client';
 
-import { useState, useEffect, useCallback, Suspense } from 'react';
+import { useState, useEffect, useCallback, useMemo, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
+import QRCode from 'qrcode';
 import { createClient } from '@/lib/supabase/client';
 import { useApp } from '@/hooks/use-app';
 import { useToast } from '@/components/ui/toast';
@@ -9,6 +10,130 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/components/ui/table';
+
+// ==========================================
+// Vector QR Code SVG Component for Thermal Clarity
+// ==========================================
+function QRCodeDisplay({ text, size = 62 }: { text: string; size?: number }) {
+  const [svgContent, setSvgContent] = useState<string>('');
+
+  useEffect(() => {
+    if (!text) return;
+    QRCode.toString(text, {
+      type: 'svg',
+      margin: 0,
+      errorCorrectionLevel: 'M',
+      color: {
+        dark: '#000000',
+        light: '#ffffff'
+      }
+    })
+      .then((svg) => {
+        setSvgContent(svg);
+      })
+      .catch((err) => {
+        console.error('Error generating QR code:', err);
+      });
+  }, [text]);
+
+  if (!svgContent) {
+    return <div style={{ width: `${size}px`, height: `${size}px` }} className="bg-slate-200 animate-pulse rounded" />;
+  }
+
+  return (
+    <div
+      style={{ width: `${size}px`, height: `${size}px` }}
+      className="flex items-center justify-center overflow-hidden [&>svg]:w-full [&>svg]:h-full [&>svg]:block"
+      dangerouslySetInnerHTML={{ __html: svgContent }}
+    />
+  );
+}
+
+// ==========================================
+// 50mm x 25mm Individual Sticker Label Card (Design matching Reference Image 2)
+// ==========================================
+function BarcodeStickerCard({ sticker }: { sticker: any }) {
+  if (!sticker) {
+    return (
+      <div 
+        style={{ width: '50mm', height: '25mm' }} 
+        className="opacity-0 pointer-events-none" 
+      />
+    );
+  }
+
+  return (
+    <div
+      style={{
+        width: '50mm',
+        height: '25mm',
+        boxSizing: 'border-box',
+        padding: '1.2mm 2mm 1.2mm 1.5mm',
+      }}
+      className="bg-white text-black font-sans border border-slate-300 rounded flex flex-col justify-between overflow-hidden select-none print:border-0 print:rounded-none"
+    >
+      {/* Top Section: QR Code on Left + Price & Composite Tracking Code on Right */}
+      <div className="flex items-center justify-between gap-1 flex-1 min-h-0">
+        {/* Crisp Vector QR Code */}
+        <div className="flex-shrink-0 flex items-center justify-center">
+          <QRCodeDisplay text={sticker.trackingCode || sticker.batchNo} size={54} />
+        </div>
+
+        {/* Price & Composite Tracking Code */}
+        <div className="flex-1 flex flex-col justify-center items-end text-right pl-1 min-w-0">
+          <div className="font-black text-[13px] leading-tight tracking-tight text-black whitespace-nowrap">
+            RS.{Number(sticker.salesRate || 0).toFixed(2)}
+          </div>
+          <div className="font-bold font-mono text-[11px] leading-tight tracking-wide text-black mt-0.5 whitespace-nowrap">
+            {sticker.trackingCode}
+          </div>
+        </div>
+      </div>
+
+      {/* Bottom Row: Batch No (Left) + Fixed Rate (Right) */}
+      <div className="flex items-center justify-between pt-0.5 text-black font-bold border-t border-dotted border-slate-300 print:border-none">
+        <span className="font-mono text-[10px] leading-none tracking-tight">
+          {sticker.batchNo}
+        </span>
+        <span className="text-[10px] leading-none tracking-tight font-semibold">
+          {sticker.rateType || 'Fixed Rate'}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+// ==========================================
+// Helper function to build composite tracking code
+// Pattern: [Productcode][Year(2-digit)][Month(2-digit)][EntrySno][Sno] -> Ex: 103260821
+// ==========================================
+function buildTrackingCode(r: any, idx: number, fallbackInvDate?: string): string {
+  // 1. Product code (e.g. 103)
+  const rawPrd = String(r.product?.prd_code || r.prcode || '103').replace(/^[^\d]+/, '') || '103';
+
+  // 2. Date YY and MM
+  const invDateStr = r.inv_date || fallbackInvDate || '2026-08-31';
+  let yy = '26';
+  let mm = '08';
+  try {
+    const d = new Date(invDateStr);
+    if (!isNaN(d.getTime())) {
+      yy = String(d.getFullYear()).slice(-2);
+      mm = String(d.getMonth() + 1).padStart(2, '0');
+    }
+  } catch (e) {
+    // fallback
+  }
+
+  // 3. Entry SNo (e.g. 2)
+  const entrySno = String(r.entry_sno || 2);
+
+  // 4. SNo (e.g. 1)
+  const sno = String(r.sno || (idx + 1));
+
+  // Ex: 103 + 26 + 08 + 2 + 1 = 103260821
+  return `${rawPrd}${yy}${mm}${entrySno}${sno}`;
+}
 
 function BarcodePrintingContent() {
   const router = useRouter();
@@ -26,6 +151,7 @@ function BarcodePrintingContent() {
 
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [loading, setLoading] = useState(true);
+  const [showPreviewModal, setShowPreviewModal] = useState(false);
 
   // Filters
   const [barcodeName, setBarcodeName] = useState('2StickerFixedPrice');
@@ -262,13 +388,37 @@ function BarcodePrintingContent() {
     setSelectedIds(next);
   };
 
-  const handlePrint = () => {
+  const handlePrintCountChange = (index: number, valStr: string) => {
+    const parsed = Math.max(1, parseInt(valStr) || 1);
+    setRecords(prev => prev.map((item, idx) => idx === index ? { ...item, print_count: parsed } : item));
+  };
+
+  const handleOpenPrintPreview = () => {
     if (selectedIds.size === 0) {
       toast({ title: 'No barcodes selected for printing', variant: 'destructive' });
       return;
     }
+    setShowPreviewModal(true);
+  };
+
+  const handleExecutePrint = () => {
     window.print();
   };
+
+  // Keyboard Shortcuts (F11 for Print, F5 for Refresh)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'F11') {
+        e.preventDefault();
+        handleOpenPrintPreview();
+      } else if (e.key === 'F5') {
+        e.preventDefault();
+        fetchBarcodes();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [fetchBarcodes, selectedIds]);
 
   // Close form -> return to Purchase Transaction Screen of respective Invoice No
   const handleCloseForm = () => {
@@ -294,6 +444,50 @@ function BarcodePrintingContent() {
 
   const totalStickersCount = records.reduce((sum, r) => sum + (r.print_count || 1), 0);
   const totalItemQty = records.reduce((sum, r) => sum + (r.qty || 0), 0);
+
+  // ==========================================
+  // Expanded Stickers List & Paired 2-Column Grid for 50x25mm Label Sheets
+  // ==========================================
+  const printableStickersList = useMemo(() => {
+    const list: any[] = [];
+    records.forEach((r, idx) => {
+      if (selectedIds.has(r.bar_ref_id)) {
+        const count = Math.max(1, r.print_count || 1);
+        const purchaseRate = r.pc_pur_rate || r.product?.rate || 0;
+        const salesRate = r.pc_sale_rate && r.pc_sale_rate > 0 
+          ? r.pc_sale_rate 
+          : r.product?.sales_price && r.product?.sales_price > 0 
+            ? r.product.sales_price 
+            : Number((purchaseRate * 1.25).toFixed(2));
+
+        const trackingCode = buildTrackingCode(r, idx, activeInvoiceInfo?.invDate);
+
+        for (let c = 0; c < count; c++) {
+          list.push({
+            ...r,
+            idx,
+            salesRate,
+            trackingCode,
+            batchNo: r.bar_no || 'KS00001',
+            rateType: 'Fixed Rate'
+          });
+        }
+      }
+    });
+    return list;
+  }, [records, selectedIds, activeInvoiceInfo]);
+
+  // Group stickers into pairs (1 row 2 columns)
+  const stickerPairs = useMemo(() => {
+    const pairs: any[][] = [];
+    for (let i = 0; i < printableStickersList.length; i += 2) {
+      pairs.push([
+        printableStickersList[i],
+        printableStickersList[i + 1] || null
+      ]);
+    }
+    return pairs;
+  }, [printableStickersList]);
 
   return (
     <div className="min-h-screen bg-slate-100 dark:bg-slate-900 p-3 space-y-3 font-sans text-xs">
@@ -375,7 +569,7 @@ function BarcodePrintingContent() {
               value={barcodeName}
               onChange={e => setBarcodeName(e.target.value)}
             >
-              <option value="2StickerFixedPrice">2StickerFixedPrice</option>
+              <option value="2StickerFixedPrice">2StickerFixedPrice (50x25mm QR)</option>
               <option value="[Default]">[Default]</option>
             </select>
           </div>
@@ -389,9 +583,9 @@ function BarcodePrintingContent() {
               onChange={e => setPrinterName(e.target.value)}
             >
               <option value="Default System Printer (System Dialog)">Default System Printer (System Dialog)</option>
-              <option value="TVS LP 46 Neo">TVS LP 46 Neo (Thermal)</option>
+              <option value="TVS LP 46 Neo">TVS LP 46 Neo (Thermal 50x25mm)</option>
               <option value="Zebra ZD220 / ZT230">Zebra ZD220 / ZT230 (Thermal)</option>
-              <option value="TSC TE244 / TTP-244 Pro">TSC TE244 / TTP-244 Pro</option>
+              <option value="TSC TE244 / TTP-244 Pro">TSC TE244 / TTP-244 Pro (2-Up)</option>
               <option value="Godex G500">Godex G500 (Thermal)</option>
               <option value="Citizen CL-S621">Citizen CL-S621</option>
               <option value="Generic / Text Only">Generic / Text Only Printer</option>
@@ -418,13 +612,15 @@ function BarcodePrintingContent() {
           <Button size="sm" variant="outline" className="h-7 text-xs" onClick={fetchBarcodes}>
             Show [F5]
           </Button>
-          <Button size="sm" className="h-7 text-xs bg-amber-600 hover:bg-amber-700 text-white font-bold" onClick={handlePrint}>
+          <Button size="sm" className="h-7 text-xs bg-amber-600 hover:bg-amber-700 text-white font-bold shadow" onClick={handleOpenPrintPreview}>
             Print [F11]
           </Button>
-          <Button size="sm" variant="outline" className="h-7 text-xs">
+          <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setShowPreviewModal(true)}>
             Attach Image
           </Button>
-          <Button size="sm" variant="outline" className="h-7 text-xs">
+          <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => {
+            alert(`50x25mm Barcode Sticker Field List:\n\n1. QR Code: Encodes tracking composite code\n2. Rate: RS.xxxx.xx\n3. Product Code / Tracking: Ex. 103260821\n4. Batch No: Ex. KS02433\n5. Rate Type: Fixed Rate`);
+          }}>
             Barcode Field List
           </Button>
         </div>
@@ -441,7 +637,7 @@ function BarcodePrintingContent() {
                 <TableHead className="p-1">Product Code</TableHead>
                 <TableHead className="p-1 min-w-[110px]">Batch No</TableHead>
                 <TableHead className="p-1 min-w-[180px]">Product Name</TableHead>
-                <TableHead className="w-16 text-center p-1 bg-lime-500 text-white dark:bg-lime-600">Print Count</TableHead>
+                <TableHead className="w-20 text-center p-1 bg-lime-500 text-white dark:bg-lime-600">Print Count</TableHead>
                 <TableHead className="p-1">Inv Date</TableHead>
                 <TableHead className="p-1">Invoice No</TableHead>
                 <TableHead className="w-16 text-center p-1">Entry SNo</TableHead>
@@ -499,7 +695,14 @@ function BarcodePrintingContent() {
                       <TableCell className="font-mono font-bold text-amber-600 dark:text-amber-400 p-1">{r.bar_no}</TableCell>
                       <TableCell className="font-medium p-1">{prdName}</TableCell>
                       <TableCell className="text-center font-mono font-bold bg-lime-400/30 text-lime-900 dark:text-lime-200 p-1">
-                        {r.print_count || 1}
+                        <input
+                          type="number"
+                          min="1"
+                          value={r.print_count || 1}
+                          onChange={(e) => handlePrintCountChange(idx, e.target.value)}
+                          className="w-12 h-6 text-center font-bold bg-white dark:bg-slate-800 border rounded font-mono [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                          title="Print Count (Copies)"
+                        />
                       </TableCell>
                       <TableCell className="font-mono p-1">
                         {r.inv_date ? new Date(r.inv_date).toISOString().split('T')[0] : '2026-08-20'}
@@ -545,6 +748,131 @@ function BarcodePrintingContent() {
           </div>
         </div>
       </div>
+
+      {/* ========================================================================= */}
+      {/* Interactive 50x25mm 2-Column QR Code Barcode Print Preview Modal */}
+      {/* ========================================================================= */}
+      {showPreviewModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-background border rounded-lg shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden animate-in fade-in zoom-in duration-150">
+            {/* Modal Header */}
+            <div className="bg-amber-500 text-white p-3 flex justify-between items-center">
+              <div className="flex items-center gap-2">
+                <span className="font-bold text-sm">QR Code Barcode Print Preview (50×25mm 1 Row 2 Column)</span>
+                <span className="bg-amber-700/60 px-2 py-0.5 rounded text-xs font-mono font-bold">
+                  {totalSelectedStickers} Stickers Selected
+                </span>
+              </div>
+              <button 
+                onClick={() => setShowPreviewModal(false)}
+                className="text-white hover:bg-amber-600 rounded px-2 py-0.5 font-bold"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Modal Body: Scrollable Sheet of 50x25mm 2-Column Stickers */}
+            <div className="p-4 overflow-y-auto flex-1 bg-slate-200 dark:bg-slate-950 flex flex-col items-center gap-3">
+              <div className="text-xs text-muted-foreground bg-background border px-4 py-1.5 rounded-full shadow-sm">
+                Showing exact 50×25mm 2-column sticker pairs with QR Code, Rate, Composite Tracking Code (<span className="font-mono font-bold">Ex: 103260821</span>), Batch No &amp; Fixed Rate
+              </div>
+
+              {/* Printable Stickers Preview Container */}
+              <div className="bg-white p-4 rounded shadow border border-slate-300 flex flex-col gap-2">
+                {stickerPairs.length === 0 ? (
+                  <div className="p-8 text-center text-slate-500">No stickers selected for printing.</div>
+                ) : (
+                  stickerPairs.map((pair, rowIdx) => (
+                    <div 
+                      key={rowIdx} 
+                      style={{ width: '104mm', height: '25mm' }} 
+                      className="flex items-center justify-between gap-1 border-b border-dashed border-slate-300 pb-1"
+                    >
+                      <BarcodeStickerCard sticker={pair[0]} />
+                      <BarcodeStickerCard sticker={pair[1]} />
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
+            {/* Modal Footer Controls */}
+            <div className="bg-card border-t p-3 flex justify-between items-center">
+              <div className="text-xs text-muted-foreground">
+                Printer: <span className="font-bold font-mono text-foreground">{printerName}</span> (Size: 50×25mm / 2-Up Roll)
+              </div>
+              <div className="flex gap-2">
+                <Button variant="outline" size="sm" onClick={() => setShowPreviewModal(false)}>
+                  Close
+                </Button>
+                <Button 
+                  size="sm" 
+                  className="bg-amber-600 hover:bg-amber-700 text-white font-bold gap-1 px-4 shadow"
+                  onClick={handleExecutePrint}
+                >
+                  Print Stickers Now [F11]
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* Hidden DOM Area Exclusively Rendered during Thermal Window Printing */}
+      {/* ========================================================================= */}
+      <div id="barcode-printable-area" className="hidden print:block">
+        {stickerPairs.map((pair, rowIdx) => (
+          <div 
+            key={`print-row-${rowIdx}`}
+            className="sticker-pair-row"
+          >
+            <BarcodeStickerCard sticker={pair[0]} />
+            <BarcodeStickerCard sticker={pair[1]} />
+          </div>
+        ))}
+      </div>
+
+      {/* Dedicated Thermal Printing CSS Rules */}
+      <style jsx global>{`
+        @media print {
+          body * {
+            visibility: hidden !important;
+          }
+          #barcode-printable-area,
+          #barcode-printable-area * {
+            visibility: visible !important;
+          }
+          #barcode-printable-area {
+            position: absolute !important;
+            left: 0 !important;
+            top: 0 !important;
+            width: 104mm !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            background: white !important;
+            color: black !important;
+            display: block !important;
+          }
+          .sticker-pair-row {
+            display: flex !important;
+            flex-direction: row !important;
+            justify-content: space-between !important;
+            width: 104mm !important;
+            height: 25mm !important;
+            page-break-after: always !important;
+            break-after: page !important;
+            box-sizing: border-box !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            overflow: hidden !important;
+          }
+          @page {
+            size: 104mm 25mm;
+            margin: 0mm;
+          }
+        }
+      `}</style>
     </div>
   );
 }

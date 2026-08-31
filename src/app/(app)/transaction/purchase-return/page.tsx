@@ -134,7 +134,9 @@ export default function PurchaseReturnPage() {
   const [gridRows, setGridRows] = useState<ReturnGridRow[]>([]);
 
   // Expenses & Discounts
+  const [cashDiscPerc, setCashDiscPerc] = useState<number>(0);
   const [cashDisc, setCashDisc] = useState<number>(0);
+  const [splDiscPerc, setSplDiscPerc] = useState<number>(0);
   const [splDisc, setSplDisc] = useState<number>(0);
   const [otherCharges, setOtherCharges] = useState<number>(0);
   const [freightCharges, setFreightCharges] = useState<number>(0);
@@ -556,6 +558,47 @@ export default function PurchaseReturnPage() {
         .filter((_, i) => i !== index)
         .map((r, i) => ({ ...r, sno: i + 1 }))
     );
+  };
+
+  // Cash & Special Discount Handlers (Percentage <-> Amount)
+  const getReturnGoodsSubTotal = () => {
+    return gridRows.reduce((sum, r) => {
+      if (!r.prname && !r.barcodeNo) return sum;
+      const lineBase = r.qty * r.purRate;
+      return sum + Math.max(0, lineBase - r.discAmt);
+    }, 0);
+  };
+
+  const handleCashDiscPercChange = (valStr: string) => {
+    const perc = Math.max(0, Number(valStr) || 0);
+    setCashDiscPerc(perc);
+    const baseSubTotal = getReturnGoodsSubTotal();
+    const amt = Number(((baseSubTotal * perc) / 100).toFixed(2));
+    setCashDisc(amt);
+  };
+
+  const handleCashDiscAmountChange = (valStr: string) => {
+    const amt = Math.max(0, Number(valStr) || 0);
+    setCashDisc(amt);
+    const baseSubTotal = getReturnGoodsSubTotal();
+    const perc = baseSubTotal > 0 ? (amt * 100) / baseSubTotal : 0;
+    setCashDiscPerc(Number(perc.toFixed(2)));
+  };
+
+  const handleSplDiscPercChange = (valStr: string) => {
+    const perc = Math.max(0, Number(valStr) || 0);
+    setSplDiscPerc(perc);
+    const baseSubTotal = getReturnGoodsSubTotal();
+    const amt = Number(((baseSubTotal * perc) / 100).toFixed(2));
+    setSplDisc(amt);
+  };
+
+  const handleSplDiscAmountChange = (valStr: string) => {
+    const amt = Math.max(0, Number(valStr) || 0);
+    setSplDisc(amt);
+    const baseSubTotal = getReturnGoodsSubTotal();
+    const perc = baseSubTotal > 0 ? (amt * 100) / baseSubTotal : 0;
+    setSplDiscPerc(Number(perc.toFixed(2)));
   };
 
   // Calculations Summary
@@ -1322,14 +1365,56 @@ export default function PurchaseReturnPage() {
                   <span className="font-bold">₹{totals.subTotal.toFixed(2)}</span>
                 </div>
 
-                <div className="flex justify-between items-center">
-                  <span className="text-slate-600">Cash Disc.:</span>
-                  <Input
-                    type="number"
-                    value={cashDisc}
-                    onChange={(e) => setCashDisc(Number(e.target.value) || 0)}
-                    className="h-6 text-xs text-right w-24 font-mono"
-                  />
+                {/* Cash Discount Dual Inputs */}
+                <div className="flex justify-between items-center gap-1">
+                  <span className="text-slate-600 font-medium">Cash Disc.:</span>
+                  <div className="flex items-center gap-1">
+                    <Input
+                      type="number"
+                      step="0.01"
+                      value={cashDiscPerc !== 0 ? cashDiscPerc : ""}
+                      onChange={(e) => handleCashDiscPercChange(e.target.value)}
+                      placeholder="0.00"
+                      className="h-6 text-xs text-right w-14 font-mono px-1 font-bold [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                      title="Cash Discount Percentage (%)"
+                    />
+                    <span className="text-[10px] font-bold text-slate-500">%</span>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      value={cashDisc !== 0 ? cashDisc : ""}
+                      onChange={(e) => handleCashDiscAmountChange(e.target.value)}
+                      placeholder="0.00"
+                      className="h-6 text-xs text-right w-20 font-mono px-1 font-bold text-red-600 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                      title="Cash Discount Amount (₹)"
+                    />
+                  </div>
+                </div>
+
+                {/* Special Discount Dual Inputs */}
+                <div className="flex justify-between items-center gap-1">
+                  <span className="text-slate-600 font-medium">Special Disc.:</span>
+                  <div className="flex items-center gap-1">
+                    <Input
+                      type="number"
+                      step="0.01"
+                      value={splDiscPerc !== 0 ? splDiscPerc : ""}
+                      onChange={(e) => handleSplDiscPercChange(e.target.value)}
+                      placeholder="0.00"
+                      className="h-6 text-xs text-right w-14 font-mono px-1 font-bold [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                      title="Special Discount Percentage (%)"
+                    />
+                    <span className="text-[10px] font-bold text-slate-500">%</span>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      value={splDisc !== 0 ? splDisc : ""}
+                      onChange={(e) => handleSplDiscAmountChange(e.target.value)}
+                      placeholder="0.00"
+                      className="h-6 text-xs text-right w-20 font-mono px-1 font-bold text-red-600 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                      title="Special Discount Amount (₹)"
+                    />
+                  </div>
                 </div>
 
                 <div className="flex justify-between items-center font-bold">

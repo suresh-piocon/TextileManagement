@@ -87,7 +87,9 @@ function PurchaseTransactionContent() {
   const [remarks, setRemarks] = useState<string>('');
 
   // Discount & TDS State
+  const [cashDiscPerc, setCashDiscPerc] = useState<number>(0);
   const [cashDisc, setCashDisc] = useState<number>(0);
+  const [splDiscPerc, setSplDiscPerc] = useState<number>(0);
   const [splDisc, setSplDisc] = useState<number>(0);
   const [tdsAmt, setTdsAmt] = useState<number>(0);
   const [roundOff, setRoundOff] = useState<number>(0);
@@ -146,6 +148,14 @@ function PurchaseTransactionContent() {
 
       setCashDisc(inv.pm_cash_disc || 0);
       setSplDisc(inv.pm_spl_disc || 0);
+      const baseGoodsTotal = (inv.pm_sub_total || 0) - (inv.pm_item_disc_amt || 0);
+      if (baseGoodsTotal > 0) {
+        setCashDiscPerc(Number((((inv.pm_cash_disc || 0) * 100) / baseGoodsTotal).toFixed(2)));
+        setSplDiscPerc(Number((((inv.pm_spl_disc || 0) * 100) / baseGoodsTotal).toFixed(2)));
+      } else {
+        setCashDiscPerc(0);
+        setSplDiscPerc(0);
+      }
       setTdsAmt(inv.pm_tds_amt || 0);
       setRoundOff(inv.pm_rnd_off || 0);
 
@@ -206,7 +216,9 @@ function PurchaseTransactionContent() {
     setTaxOnExpenses(false);
     setSalesPerson('Direct');
     setRemarks('');
+    setCashDiscPerc(0);
     setCashDisc(0);
+    setSplDiscPerc(0);
     setSplDisc(0);
     setTdsAmt(0);
     setRoundOff(0);
@@ -525,6 +537,47 @@ function PurchaseTransactionContent() {
     }
 
     setItems(updated);
+  };
+
+  // Bidirectional Discount Handlers (Percentage <-> Amount)
+  const getGoodsSubTotal = useCallback(() => {
+    return items.reduce((sum, r) => {
+      const lineBase = (r.qty || 0) * (r.rate || 0);
+      const dAmt = r.disc_amt || 0;
+      return sum + Math.max(0, lineBase - dAmt);
+    }, 0);
+  }, [items]);
+
+  const handleCashDiscPercChange = (valStr: string) => {
+    const perc = Math.max(0, Number(valStr) || 0);
+    setCashDiscPerc(perc);
+    const baseSubTotal = getGoodsSubTotal();
+    const amt = Number(((baseSubTotal * perc) / 100).toFixed(2));
+    setCashDisc(amt);
+  };
+
+  const handleCashDiscAmountChange = (valStr: string) => {
+    const amt = Math.max(0, Number(valStr) || 0);
+    setCashDisc(amt);
+    const baseSubTotal = getGoodsSubTotal();
+    const perc = baseSubTotal > 0 ? (amt * 100) / baseSubTotal : 0;
+    setCashDiscPerc(Number(perc.toFixed(2)));
+  };
+
+  const handleSplDiscPercChange = (valStr: string) => {
+    const perc = Math.max(0, Number(valStr) || 0);
+    setSplDiscPerc(perc);
+    const baseSubTotal = getGoodsSubTotal();
+    const amt = Number(((baseSubTotal * perc) / 100).toFixed(2));
+    setSplDisc(amt);
+  };
+
+  const handleSplDiscAmountChange = (valStr: string) => {
+    const amt = Math.max(0, Number(valStr) || 0);
+    setSplDisc(amt);
+    const baseSubTotal = getGoodsSubTotal();
+    const perc = baseSubTotal > 0 ? (amt * 100) / baseSubTotal : 0;
+    setSplDiscPerc(Number(perc.toFixed(2)));
   };
 
   // Summaries & Tax Calculations
@@ -1190,23 +1243,68 @@ function PurchaseTransactionContent() {
               <span className="text-muted-foreground">Disc. Amount</span>
               <span className="font-mono">₹{totalItemDisc.toFixed(2)}</span>
             </div>
-            <div className="flex justify-between items-center">
-              <span className="text-muted-foreground">Cash Disc.</span>
-              <input
-                type="text"
-                value={cashDisc || ''}
-                onChange={e => setCashDisc(parseFloat(e.target.value) || 0)}
-                className={`h-6 w-24 text-xs text-right font-mono border border-input rounded px-1.5 font-bold focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${focusHighlightClass}`}
-              />
+            {/* Cash Discount Dual Inputs */}
+            <div className="flex justify-between items-center gap-1">
+              <span className="text-muted-foreground font-medium">Cash Disc.</span>
+              <div className="flex items-center gap-1">
+                <input
+                  type="number"
+                  step="0.01"
+                  value={cashDiscPerc !== 0 ? cashDiscPerc : ''}
+                  onChange={e => handleCashDiscPercChange(e.target.value)}
+                  onBlur={() => {
+                    if (cashDiscPerc) setCashDiscPerc(Number(cashDiscPerc.toFixed(2)));
+                  }}
+                  placeholder="0.00"
+                  className={`h-6 w-14 text-xs text-right font-mono border border-input rounded px-1 font-bold focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${focusHighlightClass}`}
+                  title="Cash Discount Percentage (%)"
+                />
+                <span className="text-[10px] font-bold text-muted-foreground">%</span>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={cashDisc !== 0 ? cashDisc : ''}
+                  onChange={e => handleCashDiscAmountChange(e.target.value)}
+                  onBlur={() => {
+                    if (cashDisc) setCashDisc(Number(cashDisc.toFixed(2)));
+                  }}
+                  placeholder="0.00"
+                  className={`h-6 w-20 text-xs text-right font-mono border border-input rounded px-1 font-bold text-red-600 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${focusHighlightClass}`}
+                  title="Cash Discount Amount (₹)"
+                />
+              </div>
             </div>
-            <div className="flex justify-between items-center">
-              <span className="text-muted-foreground">Special Disc.</span>
-              <input
-                type="text"
-                value={splDisc || ''}
-                onChange={e => setSplDisc(parseFloat(e.target.value) || 0)}
-                className={`h-6 w-24 text-xs text-right font-mono border border-input rounded px-1.5 font-bold focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${focusHighlightClass}`}
-              />
+
+            {/* Special Discount Dual Inputs */}
+            <div className="flex justify-between items-center gap-1">
+              <span className="text-muted-foreground font-medium">Special Disc.</span>
+              <div className="flex items-center gap-1">
+                <input
+                  type="number"
+                  step="0.01"
+                  value={splDiscPerc !== 0 ? splDiscPerc : ''}
+                  onChange={e => handleSplDiscPercChange(e.target.value)}
+                  onBlur={() => {
+                    if (splDiscPerc) setSplDiscPerc(Number(splDiscPerc.toFixed(2)));
+                  }}
+                  placeholder="0.00"
+                  className={`h-6 w-14 text-xs text-right font-mono border border-input rounded px-1 font-bold focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${focusHighlightClass}`}
+                  title="Special Discount Percentage (%)"
+                />
+                <span className="text-[10px] font-bold text-muted-foreground">%</span>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={splDisc !== 0 ? splDisc : ''}
+                  onChange={e => handleSplDiscAmountChange(e.target.value)}
+                  onBlur={() => {
+                    if (splDisc) setSplDisc(Number(splDisc.toFixed(2)));
+                  }}
+                  placeholder="0.00"
+                  className={`h-6 w-20 text-xs text-right font-mono border border-input rounded px-1 font-bold text-red-600 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${focusHighlightClass}`}
+                  title="Special Discount Amount (₹)"
+                />
+              </div>
             </div>
             <div className="flex justify-between items-center border-t pt-1 font-bold">
               <span>Total Disc.</span>
