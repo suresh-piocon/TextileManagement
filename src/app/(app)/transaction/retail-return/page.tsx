@@ -21,12 +21,10 @@ import {
   DialogContent,
 } from "@/components/ui/dialog";
 import {
-  Barcode,
-  Search,
   CheckCircle2,
   Printer,
+  Search,
   RotateCcw,
-  PackageX,
 } from "lucide-react";
 
 interface POSReturnGridRow {
@@ -49,6 +47,27 @@ interface POSReturnGridRow {
   igstPerc: number;
   isBatchItem: boolean;
   maxStockQty: number;
+}
+
+interface SoldItem {
+  id: string;
+  batchNo: string;
+  productCode: string;
+  productName: string;
+  hsnCode: string;
+  outwardQty: number;
+  outwardDate: string;
+  invNo: string;
+  taxableAmt: number;
+  netAmount: number;
+  customerName: string;
+  unitName: string;
+  rateUnit: number;
+  disPerc: number;
+  sgstPerc: number;
+  cgstPerc: number;
+  igstPerc: number;
+  prcode: number;
 }
 
 interface PaymentRow {
@@ -81,6 +100,23 @@ function numberToWords(num: number): string {
   const integerPart = Math.floor(Math.abs(num));
   const words = inWords(integerPart);
   return words ? `${words} Rupees Only` : "Zero Rupees Only";
+}
+
+function formatShortRefNarration(invNo?: string, dateStr?: string): string {
+  const refNo = invNo || "POS-000001";
+  let formattedDt = "31-08-26";
+  if (dateStr) {
+    const raw = dateStr.split("T")[0];
+    const parts = raw.split("-");
+    if (parts.length === 3) {
+      if (parts[0].length === 4) {
+        formattedDt = `${parts[2]}-${parts[1]}-${parts[0].slice(-2)}`;
+      } else {
+        formattedDt = raw;
+      }
+    }
+  }
+  return `SaleRefNo.${refNo},Dt${formattedDt}`;
 }
 
 export default function RetailPOSSalesReturnPage() {
@@ -121,17 +157,29 @@ export default function RetailPOSSalesReturnPage() {
   const [customerEmail, setCustomerEmail] = useState<string>("");
 
   // DB Maps & Lists
-  const [stockItems, setStockItems] = useState<any[]>([]);
-  const [savedReturnInvoices, setSavedReturnInvoices] = useState<string[]>([]);
+  const [soldItemsList, setSoldItemsList] = useState<SoldItem[]>([]);
+  const [savedReturnInvoices, setSavedReturnInvoices] = useState<any[]>([]);
   const [currentIndex, setCurrentIndex] = useState<number>(-1);
-  const [productTaxMap, setProductTaxMap] = useState<Map<string, { gstPerc: number; hsnCode: string }>>(new Map());
+  const [productTaxMap, setProductTaxMap] = useState<
+    Map<string, { refNo?: number; prdCode?: string; prdName?: string; gstPerc: number; hsnCode: string; units?: string; grpCode?: number }>
+  >(new Map());
 
   // Main POS Return Grid Rows
   const [gridRows, setGridRows] = useState<POSReturnGridRow[]>([]);
 
-  // Modals
-  const [isStockModalOpen, setIsStockModalOpen] = useState<boolean>(false);
-  const [selectedStockRowIndex, setSelectedStockRowIndex] = useState<number>(0);
+  // Modals state: Sold Items Selection Modal [F5]
+  const [isSoldItemsModalOpen, setIsSoldItemsModalOpen] = useState<boolean>(false);
+  const [soldItemSearchTerm, setSoldItemSearchTerm] = useState<string>("");
+  const [selectedSoldRowIndex, setSelectedSoldRowIndex] = useState<number>(0);
+  const soldRowRefs = useRef<(HTMLTableRowElement | null)[]>([]);
+
+  // Return Invoices Search Modal [F3] (Descending order as per Image 2)
+  const [isReturnSearchModalOpen, setIsReturnSearchModalOpen] = useState<boolean>(false);
+  const [returnSearchTerm, setReturnSearchTerm] = useState<string>("");
+  const [selectedReturnRowIndex, setSelectedReturnRowIndex] = useState<number>(0);
+  const returnRowRefs = useRef<(HTMLTableRowElement | null)[]>([]);
+
+  // Payment Details Modal [F8]
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState<boolean>(false);
   const [paymentRows, setPaymentRows] = useState<PaymentRow[]>([
     { type: "CASH", amount: 0, remarks: "" },
@@ -143,42 +191,231 @@ export default function RetailPOSSalesReturnPage() {
   const focusHighlightClass =
     "focus:bg-yellow-200 focus:text-slate-950 focus:outline-none focus:ring-2 focus:ring-amber-500 font-bold transition-colors";
 
-  // Fetch initial data: Products tax map & Next POS Return Sequence
+  // Auto-scroll highlighted row into view in Sold Items Modal [F5]
+  useEffect(() => {
+    if (isSoldItemsModalOpen && soldRowRefs.current[selectedSoldRowIndex]) {
+      soldRowRefs.current[selectedSoldRowIndex]?.scrollIntoView({
+        behavior: "smooth",
+        block: "nearest",
+      });
+    }
+  }, [selectedSoldRowIndex, isSoldItemsModalOpen]);
+
+  // Auto-scroll highlighted row into view in Return Invoices Search Modal [F3]
+  useEffect(() => {
+    if (isReturnSearchModalOpen && returnRowRefs.current[selectedReturnRowIndex]) {
+      returnRowRefs.current[selectedReturnRowIndex]?.scrollIntoView({
+        behavior: "smooth",
+        block: "nearest",
+      });
+    }
+  }, [selectedReturnRowIndex, isReturnSearchModalOpen]);
+
+  // Fetch initial data: Products tax map, Sold Items, and Saved POS Return Sequence (Descending)
   const fetchInitialData = useCallback(async () => {
     if (!company?.frm_code) return;
     try {
       // 1. Fetch Product Tax Map
       const { data: prdData } = await supabase
         .from("product")
-        .select("prd_code, gst_perc, hsn_code")
+        .select("ref_no, prd_code, prd_name, gst_perc, hsn_code, units, grp_code")
         .eq("frm_code", company.frm_code);
 
-      const map = new Map<string, { gstPerc: number; hsnCode: string }>();
+      const map = new Map<string, { refNo?: number; prdCode?: string; prdName?: string; gstPerc: number; hsnCode: string; units?: string; grpCode?: number }>();
       if (prdData) {
         prdData.forEach((p) => {
-          map.set(String(p.prd_code), {
+          const val = {
+            refNo: p.ref_no,
+            prdCode: String(p.prd_code),
+            prdName: p.prd_name || `SAREES-${p.hsn_code || "50079010"}`,
             gstPerc: Number(p.gst_perc) || 5,
             hsnCode: p.hsn_code || "50079010",
-          });
+            units: p.units || "NOS",
+            grpCode: p.grp_code || 1,
+          };
+          map.set(String(p.ref_no), val);
+          map.set(String(p.prd_code), val);
         });
       }
       setProductTaxMap(map);
 
-      // 2. Fetch distinct saved return invoice numbers (POS-SR-%) from category
-      const { data: retRows } = await supabase
-        .from("bar_temp")
-        .select("category")
-        .eq("frm_code", company.frm_code)
-        .ilike("category", "POS-SR-%");
+      // 2. Fetch Sold Items from retail_sale_child & bar_temp
+      const [childRes, barRes] = await Promise.all([
+        supabase
+          .from("retail_sale_child")
+          .select("*, retail_sale_mast(*), product(*)")
+          .eq("frm_code", company.frm_code)
+          .order("dc_ref_no", { ascending: false }),
+        supabase
+          .from("bar_temp")
+          .select("*, product(*)")
+          .eq("frm_code", company.frm_code)
+          .or("sold_status.eq.S,inv_no.not.is.null")
+          .order("bar_ref_id", { ascending: false })
+      ]);
 
-      const distinctInvoices = Array.from(
-        new Set(retRows?.map((r) => r.category).filter(Boolean) || [])
-      ).sort();
+      const soldList: SoldItem[] = [];
+      const seenBarcodes = new Set<string>();
 
-      setSavedReturnInvoices(distinctInvoices);
+      if (childRes.data && childRes.data.length > 0) {
+        childRes.data.forEach((c: any) => {
+          const barNo = c.dc_bar_no || "";
+          if (barNo && !seenBarcodes.has(barNo)) {
+            seenBarcodes.add(barNo);
+            const prd = c.product;
+            const mast = c.retail_sale_mast || {};
+            const prcodeStr = String(c.dc_prcode || prd?.ref_no || 1);
+            const taxInfo = map.get(prcodeStr) || {
+              refNo: c.dc_prcode || 1,
+              prdCode: "101",
+              prdName: prd?.prd_name || "SAREES",
+              gstPerc: 5,
+              hsnCode: prd?.hsn_code || "50079010",
+              units: prd?.units || "NOS",
+              grpCode: 1,
+            };
 
+            const qty = Number(c.dc_qty || 1);
+            const rate = Number(c.dc_rate || 0);
+            const taxable = Number(c.dc_net_tot || (qty * rate));
+            const cgst = Number(c.dc_cgst_perc || taxInfo.gstPerc / 2 || 2.5);
+            const sgst = Number(c.dc_sgst_perc || taxInfo.gstPerc / 2 || 2.5);
+            const totTax = (taxable * (cgst + sgst)) / 100;
+            const netAmt = taxable + totTax;
+
+            soldList.push({
+              id: `sold-child-${c.dc_ref_no}`,
+              batchNo: barNo,
+              productCode: barNo,
+              productName: prd?.prd_name || taxInfo.prdName || `SAREES-${taxInfo.hsnCode}`,
+              hsnCode: taxInfo.hsnCode,
+              outwardQty: qty,
+              outwardDate: mast.rm_bill_date ? String(mast.rm_bill_date).split("T")[0] : (c.rm_bill_date ? String(c.rm_bill_date).split("T")[0] : new Date().toISOString().split("T")[0]),
+              invNo: mast.rm_bill_ref_no || c.rm_bill_no || "POS-000001",
+              taxableAmt: taxable,
+              netAmount: netAmt,
+              customerName: mast.cust_name || "Cash Customer",
+              unitName: prd?.units || taxInfo.units || "NOS",
+              rateUnit: rate,
+              disPerc: 0,
+              sgstPerc: sgst,
+              cgstPerc: cgst,
+              igstPerc: Number(c.dc_igst_perc || 0),
+              prcode: taxInfo.refNo || c.dc_prcode || 1,
+            });
+          }
+        });
+      }
+
+      if (barRes.data && barRes.data.length > 0) {
+        barRes.data.forEach((b: any) => {
+          const barNo = b.bar_no || "";
+          if (barNo && !seenBarcodes.has(barNo) && (b.sold_status === "S" || (b.inv_no && String(b.inv_no).trim() !== ""))) {
+            seenBarcodes.add(barNo);
+            const prd = b.product;
+            const prcodeStr = String(b.prcode || prd?.ref_no || 1);
+            const taxInfo = map.get(prcodeStr) || {
+              refNo: b.prcode || 1,
+              prdCode: "101",
+              prdName: b.grp_name || "SAREES",
+              gstPerc: 5,
+              hsnCode: prd?.hsn_code || "50079010",
+              units: b.unit_name || "NOS",
+              grpCode: 1,
+            };
+
+            const qty = Number(b.qty || 1);
+            const rate = Number(b.pc_sale_rate || b.tag_rate || 2000);
+            const taxable = qty * rate;
+            const halfTax = (taxInfo.gstPerc || 5) / 2;
+            const totTax = (taxable * taxInfo.gstPerc) / 100;
+            const netAmt = taxable + totTax;
+
+            soldList.push({
+              id: `sold-bar-${b.bar_ref_id}`,
+              batchNo: barNo,
+              productCode: barNo,
+              productName: taxInfo.prdName || `${b.grp_name || "SAREES"}-${taxInfo.hsnCode}`,
+              hsnCode: taxInfo.hsnCode,
+              outwardQty: qty,
+              outwardDate: b.inv_date ? String(b.inv_date).split("T")[0] : (b.bar_date || new Date().toISOString().split("T")[0]),
+              invNo: b.inv_no || "POS-000001",
+              taxableAmt: taxable,
+              netAmount: netAmt,
+              customerName: "Cash Customer",
+              unitName: b.unit_name || taxInfo.units || "PCS",
+              rateUnit: rate,
+              disPerc: 0,
+              sgstPerc: halfTax,
+              cgstPerc: halfTax,
+              igstPerc: 0,
+              prcode: taxInfo.refNo || b.prcode || 1,
+            });
+          }
+        });
+      }
+
+      setSoldItemsList(soldList);
+
+      // 3. Fetch Saved Return Invoices from retail_sale_ret_mast & bar_temp (Descending Order: Latest First)
+      const [retMastRes, barTempRetRes] = await Promise.all([
+        supabase
+          .from("retail_sale_ret_mast")
+          .select("*, retail_sale_ret_child(*, product(*))")
+          .eq("rr_frm_code", company.frm_code)
+          .order("rr_ref_no", { ascending: false }),
+        supabase
+          .from("bar_temp")
+          .select("category")
+          .eq("frm_code", company.frm_code)
+          .ilike("category", "POS-SR-%")
+      ]);
+
+      const savedList: any[] = retMastRes.data ? [...retMastRes.data] : [];
+      const seenInvNos = new Set(savedList.map((s) => s.rr_bill_ref_no).filter(Boolean));
+
+      // Add any distinct invoices from bar_temp category if not already in retail_sale_ret_mast
+      if (barTempRetRes.data) {
+        const catInvoices = Array.from(
+          new Set(barTempRetRes.data.map((r) => r.category).filter(Boolean))
+        );
+        catInvoices.forEach((invNo) => {
+          if (!seenInvNos.has(invNo)) {
+            seenInvNos.add(invNo);
+            savedList.push({
+              rr_ref_no: 0,
+              rr_bill_ref_no: invNo,
+              rr_bill_date: new Date().toISOString().split("T")[0],
+              cust_name: "Cash Customer",
+              rr_ph_no: "-",
+              rr_tot_qty: 1,
+              rr_bf_gst_amt: 0,
+              rr_cgst_amt: 0,
+              rr_sgst_amt: 0,
+              rr_net_total: 0,
+              rr_mode_one: "CASH",
+              fromBarTempOnly: true,
+            });
+          }
+        });
+      }
+
+      // Sort strictly in Descending Order (latest invoice number / sequence on top)
+      savedList.sort((a, b) => {
+        const numA = parseInt(String(a.rr_bill_ref_no || "").replace(/\D+/g, "") || "0");
+        const numB = parseInt(String(b.rr_bill_ref_no || "").replace(/\D+/g, "") || "0");
+        return numB - numA;
+      });
+
+      setSavedReturnInvoices(savedList);
+
+      // Next return sequence number
       if (mode === "add") {
-        const nextSeqNo = distinctInvoices.length + 1;
+        const maxSeq = savedList.reduce((max, inv) => {
+          const num = parseInt(String(inv.rr_bill_ref_no || "").replace(/\D+/g, "") || "0");
+          return Math.max(max, num);
+        }, 0);
+        const nextSeqNo = maxSeq + 1;
         const formattedNo = `POS-SR-${String(nextSeqNo).padStart(6, "0")}`;
         setReturnInvoiceNo(formattedNo);
 
@@ -199,30 +436,43 @@ export default function RetailPOSSalesReturnPage() {
     scanInputRef.current?.focus();
   }, []);
 
-  // Stock Selection Modal Keyboard Arrow Navigation
-  useEffect(() => {
-    if (!isStockModalOpen) return;
-    const handleStockModalKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "ArrowDown") {
-        e.preventDefault();
-        setSelectedStockRowIndex((prev) =>
-          Math.min(prev + 1, stockItems.length - 1)
-        );
-      } else if (e.key === "ArrowUp") {
-        e.preventDefault();
-        setSelectedStockRowIndex((prev) => Math.max(prev - 1, 0));
-      } else if (e.key === "Enter") {
-        e.preventDefault();
-        if (stockItems[selectedStockRowIndex]) {
-          addStockItemToGrid(stockItems[selectedStockRowIndex]);
-          setIsStockModalOpen(false);
-        }
-      }
-    };
+  // Filtered Sold Items for F5 Selection Modal
+  const filteredSoldItems = useMemo(() => {
+    const q = soldItemSearchTerm.trim().toLowerCase();
+    if (!q) return soldItemsList;
+    return soldItemsList.filter((item) => {
+      const bStr = String(item.batchNo || "").toLowerCase();
+      const pStr = String(item.productName || "").toLowerCase();
+      const invStr = String(item.invNo || "").toLowerCase();
+      const custStr = String(item.customerName || "").toLowerCase();
+      const dateStr = String(item.outwardDate || "").toLowerCase();
+      return (
+        bStr.includes(q) ||
+        pStr.includes(q) ||
+        invStr.includes(q) ||
+        custStr.includes(q) ||
+        dateStr.includes(q)
+      );
+    });
+  }, [soldItemsList, soldItemSearchTerm]);
 
-    window.addEventListener("keydown", handleStockModalKeyDown);
-    return () => window.removeEventListener("keydown", handleStockModalKeyDown);
-  }, [isStockModalOpen, stockItems, selectedStockRowIndex]);
+  // Filtered Saved Return Invoices for F3 Search Modal (Descending order as per Image 2)
+  const filteredReturnInvoices = useMemo(() => {
+    const q = returnSearchTerm.trim().toLowerCase();
+    if (!q) return savedReturnInvoices;
+    return savedReturnInvoices.filter((inv) => {
+      const invNoStr = String(inv.rr_bill_ref_no || "").toLowerCase();
+      const custStr = String(inv.cust_name || "").toLowerCase();
+      const phoneStr = String(inv.rr_ph_no || "").toLowerCase();
+      const dateStr = inv.rr_bill_date ? String(inv.rr_bill_date).toLowerCase() : "";
+      return (
+        invNoStr.includes(q) ||
+        custStr.includes(q) ||
+        phoneStr.includes(q) ||
+        dateStr.includes(q)
+      );
+    });
+  }, [savedReturnInvoices, returnSearchTerm]);
 
   // Barcode / Product Code Scan Handler for Return
   const handleScanProductCode = async (inputVal?: string) => {
@@ -239,6 +489,23 @@ export default function RetailPOSSalesReturnPage() {
       return;
     }
 
+    // Check if barcode exists in sold items list
+    const matchedSoldItems = soldItemsList.filter(
+      (item) => item.batchNo.toUpperCase().includes(query) || item.productCode.toUpperCase().includes(query)
+    );
+
+    if (matchedSoldItems.length === 1) {
+      addSoldItemToGrid(matchedSoldItems[0]);
+      setScanInput("");
+      return;
+    } else if (matchedSoldItems.length > 1) {
+      setSoldItemSearchTerm(query);
+      setSelectedSoldRowIndex(0);
+      setIsSoldItemsModalOpen(true);
+      return;
+    }
+
+    // Fallback: check bar_temp
     try {
       const { data: barRows } = await supabase
         .from("bar_temp")
@@ -247,7 +514,7 @@ export default function RetailPOSSalesReturnPage() {
         .ilike("bar_no", `%${query}%`);
 
       if (barRows && barRows.length > 0) {
-        const soldRows = barRows.filter((b) => b.inv_no && String(b.inv_no).trim() !== "");
+        const soldRows = barRows.filter((b) => b.inv_no && String(b.inv_no).trim() !== "" || b.sold_status === "S");
         if (soldRows.length === 0) {
           alert(`Invalid Return Error!\nBarcode item "${query}" has NOT been sold in Retail POS Sale. Unsold stock items cannot be returned.`);
           setScanInput("");
@@ -255,15 +522,41 @@ export default function RetailPOSSalesReturnPage() {
         }
 
         if (soldRows.length === 1) {
-          addStockItemToGrid(soldRows[0]);
+          const bar = soldRows[0];
+          const prcodeStr = String(bar.prcode || 101);
+          const taxInfo = productTaxMap.get(prcodeStr) || { refNo: bar.prcode || 101, prdCode: "101", prdName: bar.grp_name || "SAREES", gstPerc: 5, hsnCode: "50079010", units: bar.unit_name || "PCS", grpCode: 1 };
+          const saleRate = Number(bar.pc_sale_rate || bar.tag_rate || 2000);
+          const halfTax = (taxInfo.gstPerc || 5) / 2;
+
+          const soldItem: SoldItem = {
+            id: `sold-fallback-${bar.bar_no}`,
+            batchNo: bar.bar_no,
+            productCode: bar.bar_no,
+            productName: taxInfo.prdName || `${bar.grp_name || "SAREES"}-${taxInfo.hsnCode}`,
+            hsnCode: taxInfo.hsnCode,
+            outwardQty: 1,
+            outwardDate: bar.inv_date || returnInvoiceDate,
+            invNo: bar.inv_no || "POS-000001",
+            taxableAmt: saleRate,
+            netAmount: saleRate * (1 + (taxInfo.gstPerc / 100)),
+            customerName: "Cash Customer",
+            unitName: bar.unit_name || "PCS",
+            rateUnit: saleRate,
+            disPerc: 0,
+            sgstPerc: halfTax,
+            cgstPerc: halfTax,
+            igstPerc: 0,
+            prcode: bar.prcode || 101,
+          };
+          addSoldItemToGrid(soldItem);
           setScanInput("");
         } else {
-          setStockItems(soldRows);
-          setSelectedStockRowIndex(0);
-          setIsStockModalOpen(true);
+          setSoldItemSearchTerm(query);
+          setSelectedSoldRowIndex(0);
+          setIsSoldItemsModalOpen(true);
         }
       } else {
-        alert(`Barcode / Product Code "${query}" not found.`);
+        alert(`Barcode / Product Code "${query}" not found in sold items.`);
         setScanInput("");
       }
     } catch (e) {
@@ -271,72 +564,53 @@ export default function RetailPOSSalesReturnPage() {
     }
   };
 
-function formatShortRefNarration(invNo?: string, dateStr?: string): string {
-  const refNo = invNo || "POS-000001";
-  let formattedDt = "25-08-26";
-  if (dateStr) {
-    const raw = dateStr.split("T")[0];
-    const parts = raw.split("-");
-    if (parts.length === 3) {
-      if (parts[0].length === 4) {
-        formattedDt = `${parts[2]}-${parts[1]}-${parts[0].slice(-2)}`;
-      } else {
-        formattedDt = raw;
-      }
-    }
-  }
-  return `SaleRefNo.${refNo},Dt${formattedDt}`;
-}
-
-  // Add Item to Return Grid with Unsold Item Restriction, Duplicate Check & Short Narration
-  const addStockItemToGrid = (bar: any) => {
-    // Unsold Item Restriction: Item MUST have been sold in Retail POS Sale (inv_no must exist)
-    if (!bar.inv_no || String(bar.inv_no).trim() === "") {
-      alert(`Invalid Return Error!\nBarcode item "${bar.bar_no}" has NOT been sold in Retail POS Sale. Unsold stock items cannot be returned.`);
-      return;
-    }
-
+  // Add Sold Item to Return Grid
+  const addSoldItemToGrid = (item: SoldItem) => {
     // Duplicate Check
     const alreadyAdded = gridRows.find(
-      (r) => r.productCode.toUpperCase() === String(bar.bar_no).toUpperCase()
+      (r) => r.productCode.toUpperCase() === String(item.batchNo).toUpperCase()
     );
     if (alreadyAdded) {
-      alert(`Duplicate Stock Item Error!\nBarcode item "${bar.bar_no}" is already entered in this Sales Return invoice.`);
+      alert(`Duplicate Stock Item Error!\nBarcode item "${item.batchNo}" is already entered in this Sales Return invoice.`);
       return;
     }
 
-    const saleRateMrp = Number(bar.pc_sale_rate || bar.tag_rate || 2000);
-    const prcodeStr = String(bar.prcode || 101);
-    const taxInfo = productTaxMap.get(prcodeStr) || { gstPerc: 5, hsnCode: "50079010" };
+    const saleRateMrp = Number(item.rateUnit || 2000);
+    const prcodeStr = String(item.prcode || 101);
+    const taxInfo = productTaxMap.get(prcodeStr) || { refNo: item.prcode || 101, prdCode: "101", prdName: item.productName || "SAREES", gstPerc: 5, hsnCode: item.hsnCode || "50079010", units: item.unitName || "PCS", grpCode: 1 };
     const gstPerc = taxInfo.gstPerc || 5;
     const halfTax = gstPerc / 2;
 
-    // Short Narration format: SaleRefNo.POS-000001,Dt25-08-26
-    const invRefStr = formatShortRefNarration(bar.inv_no, bar.inv_date || returnInvoiceDate);
+    const invRefStr = formatShortRefNarration(item.invNo, item.outwardDate || returnInvoiceDate);
 
     const newRow: POSReturnGridRow = {
-      id: `pos-ret-${bar.bar_no}-${Date.now()}`,
+      id: `pos-ret-${item.batchNo}-${Date.now()}`,
       sno: gridRows.length + 1,
-      productCode: bar.bar_no,
-      batchNo: bar.bar_no,
-      prcode: bar.prcode || 101,
-      productName: `${bar.grp_name || "Sarees"}-${taxInfo.hsnCode}`,
-      hsnCode: taxInfo.hsnCode,
+      productCode: item.batchNo,
+      batchNo: item.batchNo,
+      prcode: item.prcode || 101,
+      productName: item.productName || `${taxInfo.prdName || "Sarees"}-${taxInfo.hsnCode}`,
+      hsnCode: item.hsnCode || taxInfo.hsnCode,
       invoiceDetails: invRefStr,
-      qty: 1,
-      unitName: bar.unit_name || "PCS",
+      qty: item.outwardQty || 1,
+      unitName: item.unitName || "PCS",
       mrp: saleRateMrp,
       rateUnit: saleRateMrp,
-      amount: saleRateMrp,
-      disPerc: 0,
-      sgstPerc: halfTax,
-      cgstPerc: halfTax,
-      igstPerc: 0,
+      amount: (item.outwardQty || 1) * saleRateMrp,
+      disPerc: item.disPerc || 0,
+      sgstPerc: item.sgstPerc || halfTax,
+      cgstPerc: item.cgstPerc || halfTax,
+      igstPerc: item.igstPerc || 0,
       isBatchItem: false,
-      maxStockQty: bar.qty || 1,
+      maxStockQty: item.outwardQty || 1,
     };
 
     setGridRows((prev) => [...prev, newRow]);
+
+    // Update customer name if default
+    if (item.customerName && item.customerName !== "Cash Customer" && customerName === "Cash Customer") {
+      setCustomerName(item.customerName);
+    }
   };
 
   // Grid Cell Changes
@@ -503,7 +777,7 @@ function formatShortRefNarration(invNo?: string, dateStr?: string): string {
   // Open Payment / Return Details Modal
   const handleOpenPaymentModal = () => {
     if (gridRows.length === 0) {
-      alert("Please scan at least one barcode item to create POS Sales Return.");
+      alert("Please select at least one sold item to create POS Sales Return.");
       return;
     }
 
@@ -543,10 +817,10 @@ function formatShortRefNarration(invNo?: string, dateStr?: string): string {
     try {
       if (mode === "add") {
         const { data: existing } = await supabase
-          .from("bar_temp")
-          .select("bar_no")
-          .eq("frm_code", company.frm_code)
-          .eq("category", returnInvoiceNo);
+          .from("retail_sale_ret_mast")
+          .select("rr_ref_no")
+          .eq("rr_frm_code", company.frm_code)
+          .eq("rr_bill_ref_no", returnInvoiceNo);
 
         if (existing && existing.length > 0) {
           alert(
@@ -557,14 +831,93 @@ function formatShortRefNarration(invNo?: string, dateStr?: string): string {
         }
       }
 
-      // Stock Inwarding & Saved Return Record Persistence (original inv_no remains untouched!)
+      // 1. Save or Update retail_sale_ret_mast
+      const retMastPayload: any = {
+        rr_frm_code: company.frm_code,
+        rr_rec_no:
+          mode === "edit" && currentIndex >= 0 && savedReturnInvoices[currentIndex]
+            ? savedReturnInvoices[currentIndex].rr_rec_no || currentIndex + 1
+            : savedReturnInvoices.length + 1,
+        rr_bill_ref_no: returnInvoiceNo,
+        rr_bill_date: returnInvoiceDate,
+        cust_name: customerName || "Cash Customer",
+        rr_ph_no: customerMobile || "",
+        state: customerState || "Tamil Nadu",
+        state_code: customerStateCode || "33",
+        gstin: customerGstNo || "",
+        city: customerAddress || "",
+        rr_tot_qty: totals.totalQty,
+        rr_bf_gst_amt: totals.taxableAmt,
+        rr_cgst_amt: totals.totCgst,
+        rr_sgst_amt: totals.totSgst,
+        rr_igst_amt: 0,
+        rr_grd_tot: totals.grandTotal,
+        rr_rnd_off: totals.roundOff,
+        rr_net_total: totals.grandTotal,
+        reg_code: 50,
+        rr_cr_code: 1,
+        rr_mode_one: paymentRows[0]?.type || "CASH",
+        rr_dr_code_one: 1,
+        rr_recd_one_amt: paymentRows[0]?.amount || totals.grandTotal,
+        rr_mode_two: paymentRows[1]?.type || "",
+        rr_dr_code_two: 0,
+        rr_recd_two_amt: paymentRows[1]?.amount || 0,
+      };
+
+      let rrRefNo: number = 0;
+
+      if (mode === "edit" && currentIndex >= 0 && savedReturnInvoices[currentIndex]?.rr_ref_no) {
+        rrRefNo = savedReturnInvoices[currentIndex].rr_ref_no;
+        await supabase.from("retail_sale_ret_mast").update(retMastPayload).eq("rr_ref_no", rrRefNo);
+        await supabase.from("retail_sale_ret_child").delete().eq("rr_ref_no", rrRefNo);
+      } else {
+        const { data: newMast, error: mErr } = await supabase
+          .from("retail_sale_ret_mast")
+          .insert([retMastPayload])
+          .select("rr_ref_no")
+          .single();
+        if (!mErr && newMast) {
+          rrRefNo = newMast.rr_ref_no;
+        }
+      }
+
+      // 2. Insert into retail_sale_ret_child
+      if (rrRefNo > 0) {
+        const childPayload = gridRows.map((r) => {
+          const prdInfo = productTaxMap.get(String(r.prcode));
+          return {
+            rr_ref_no: rrRefNo,
+            rr_bill_no: returnInvoiceNo,
+            rr_bill_date: returnInvoiceDate,
+            dc_bar_no: r.productCode || r.batchNo,
+            dc_prcode: prdInfo?.refNo || (typeof r.prcode === "number" ? r.prcode : 1),
+            dc_pgrcode: prdInfo?.grpCode || 1,
+            dc_qty: r.qty,
+            dc_rate: r.rateUnit,
+            dc_net_tot: r.amount,
+            dc_cgst_perc: r.cgstPerc,
+            dc_cgst_amnt: Number(((r.amount * r.cgstPerc) / 100).toFixed(2)),
+            dc_sgst_perc: r.sgstPerc,
+            dc_sgst_amnt: Number(((r.amount * r.sgstPerc) / 100).toFixed(2)),
+            dc_igst_perc: r.igstPerc || 0,
+            dc_igst_amnt: 0,
+            frm_code: company.frm_code,
+          };
+        });
+
+        if (childPayload.length > 0) {
+          await supabase.from("retail_sale_ret_child").insert(childPayload);
+        }
+      }
+
+      // 3. Stock Inwarding: Mark returned barcodes as Available ('A') back into stock in bar_temp
       const barcodeList = gridRows.map((r) => r.productCode).filter(Boolean);
       if (barcodeList.length > 0) {
         await supabase
           .from("bar_temp")
           .update({
             sold_status: "A", // Inward stock back to Available stock list!
-            category: returnInvoiceNo, // Stores return sequence 'POS-SR-000001' while leaving original inv_no untouched!
+            category: returnInvoiceNo, // Tracks the return voucher reference
             margin: Number(cashDisc.toFixed(2)),
           })
           .in("bar_no", barcodeList)
@@ -608,11 +961,17 @@ function formatShortRefNarration(invNo?: string, dateStr?: string): string {
         await supabase
           .from("bar_temp")
           .update({
-            sold_status: "A", // Ensure stock item is added to Batch Stock list to sell again!
+            sold_status: "S", // Revert back to Sold
             category: null,
           })
           .in("bar_no", barcodeList)
           .eq("frm_code", company.frm_code);
+      }
+
+      if (currentIndex >= 0 && savedReturnInvoices[currentIndex]?.rr_ref_no) {
+        const rrRefNo = savedReturnInvoices[currentIndex].rr_ref_no;
+        await supabase.from("retail_sale_ret_child").delete().eq("rr_ref_no", rrRefNo);
+        await supabase.from("retail_sale_ret_mast").delete().eq("rr_ref_no", rrRefNo);
       }
 
       alert(`POS Sales Return ${returnInvoiceNo} deleted successfully!`);
@@ -673,7 +1032,7 @@ function formatShortRefNarration(invNo?: string, dateStr?: string): string {
       <!DOCTYPE html>
       <html>
         <head>
-          <title>POS Sales Return - ${returnInvoiceNo}</title>
+          <title>Retail POS Sales Return - ${returnInvoiceNo}</title>
           <style>
             @page { size: 80mm auto; margin: 0mm; }
             @media print { html, body { width: 80mm; margin: 0; padding: 0; } .no-print { display: none; } }
@@ -695,7 +1054,7 @@ function formatShortRefNarration(invNo?: string, dateStr?: string): string {
             <div>Chinthamaniur, Omalur Via</div>
             <div>Salem (Dt)-636455</div>
             <div>Ph: 9787738094</div>
-            <div class="bold" style="margin-top: 6px; font-size: 13px; text-decoration: underline;">POS Sales Return Voucher</div>
+            <div class="bold" style="margin-top: 6px; font-size: 13px; text-decoration: underline;">Retail POS Sales Return Voucher</div>
           </div>
 
           <div class="border-top border-bottom" style="font-size: 10px; margin-top: 6px;">
@@ -766,9 +1125,9 @@ function formatShortRefNarration(invNo?: string, dateStr?: string): string {
     printWin.document.close();
   };
 
-  // Load Saved Sales Return Record by invNo (Previous / Next)
-  const loadSavedInvoiceRecord = async (invNo: string) => {
-    if (!invNo || !company?.frm_code) return;
+  // Load Saved Sales Return Record by invRecord (Previous / Next / F3 Search)
+  const loadSavedInvoiceRecord = async (invRecord: any) => {
+    if (!invRecord || !company?.frm_code) return;
     setLoading(true);
     try {
       setCashDisc(0);
@@ -776,49 +1135,86 @@ function formatShortRefNarration(invNo?: string, dateStr?: string): string {
       setSplDisc(0);
       setExpensesAmt(0);
 
-      const { data: items, error } = await supabase
-        .from("bar_temp")
-        .select("*")
-        .eq("frm_code", company.frm_code)
-        .eq("category", invNo)
-        .order("bar_ref_id", { ascending: true });
+      const invNo = invRecord.rr_bill_ref_no || invRecord;
+      let childItems = invRecord.retail_sale_ret_child;
 
-      if (error || !items || items.length === 0) {
-        alert(`No saved return records found for return invoice ${invNo}`);
+      if (!childItems || childItems.length === 0) {
+        if (invRecord.rr_ref_no) {
+          const { data: childData } = await supabase
+            .from("retail_sale_ret_child")
+            .select("*, product(*)")
+            .eq("rr_ref_no", invRecord.rr_ref_no)
+            .order("dc_ref_no", { ascending: true });
+          childItems = childData || [];
+        }
+      }
+
+      // Fallback: check bar_temp for matching category
+      if (!childItems || childItems.length === 0) {
+        const { data: barItems } = await supabase
+          .from("bar_temp")
+          .select("*, product(*)")
+          .eq("frm_code", company.frm_code)
+          .eq("category", invNo)
+          .order("bar_ref_id", { ascending: true });
+
+        if (barItems && barItems.length > 0) {
+          childItems = barItems.map((b) => ({
+            dc_bar_no: b.bar_no,
+            dc_prcode: b.prcode || b.product?.ref_no || 101,
+            dc_pgrcode: b.product?.grp_code || 1,
+            dc_qty: b.qty || 1,
+            dc_rate: b.pc_sale_rate || 2000,
+            dc_net_tot: (b.qty || 1) * (b.pc_sale_rate || 2000),
+            dc_cgst_perc: 2.5,
+            dc_sgst_perc: 2.5,
+            product: b.product,
+            margin: b.margin,
+            inv_no: b.inv_no,
+            inv_date: b.inv_date,
+          }));
+        }
+      }
+
+      if (!childItems || childItems.length === 0) {
+        alert(`No saved return items found for return invoice ${invNo}`);
+        setLoading(false);
         return;
       }
 
       let savedCashDisc = 0;
 
-      const loadedRows: POSReturnGridRow[] = items.map((bar, idx) => {
-        const saleRateMrp = Number(bar.pc_sale_rate || 2000);
-        const prcodeStr = String(bar.prcode || 101);
-        const taxInfo = productTaxMap.get(prcodeStr) || { gstPerc: 5, hsnCode: "50079010" };
-        const halfTax = (taxInfo.gstPerc || 5) / 2;
-        if (bar.margin) {
-          savedCashDisc = Number(bar.margin);
+      const loadedRows: POSReturnGridRow[] = childItems.map((c: any, idx: number) => {
+        const prd = c.product;
+        const prcodeStr = String(c.dc_prcode || prd?.ref_no || 101);
+        const taxInfo = productTaxMap.get(prcodeStr) || { refNo: c.dc_prcode || 101, prdCode: "101", prdName: "SAREES", gstPerc: 5, hsnCode: prd?.hsn_code || "50079010", units: prd?.units || "PCS", grpCode: 1 };
+        const halfTax = Number(c.dc_cgst_perc || taxInfo.gstPerc / 2 || 2.5);
+        const saleRate = Number(c.dc_rate || 2000);
+        const qty = Number(c.dc_qty || 1);
+        if (c.margin) {
+          savedCashDisc = Number(c.margin);
         }
 
         return {
-          id: `pos-ret-saved-${bar.bar_no}-${idx}`,
+          id: `pos-ret-saved-${c.dc_bar_no || idx}-${idx}`,
           sno: idx + 1,
-          productCode: bar.bar_no,
-          batchNo: bar.bar_no,
-          prcode: bar.prcode || 101,
-          productName: `${bar.grp_name || "Sarees"}-${taxInfo.hsnCode}`,
+          productCode: c.dc_bar_no || "",
+          batchNo: c.dc_bar_no || "",
+          prcode: taxInfo.refNo || c.dc_prcode || 101,
+          productName: prd?.prd_name || taxInfo.prdName || `${prd?.grp_name || "Sarees"}-${taxInfo.hsnCode}`,
           hsnCode: taxInfo.hsnCode,
-          invoiceDetails: formatShortRefNarration(bar.inv_no || invNo, bar.inv_date || returnInvoiceDate),
-          qty: bar.qty || 1,
-          unitName: bar.unit_name || "PCS",
-          mrp: saleRateMrp,
-          rateUnit: saleRateMrp,
-          amount: (bar.qty || 1) * saleRateMrp,
+          invoiceDetails: formatShortRefNarration(c.inv_no || invNo, c.inv_date || returnInvoiceDate),
+          qty: qty,
+          unitName: prd?.units || taxInfo.units || "PCS",
+          mrp: saleRate,
+          rateUnit: saleRate,
+          amount: qty * saleRate,
           disPerc: 0,
           sgstPerc: halfTax,
           cgstPerc: halfTax,
-          igstPerc: 0,
+          igstPerc: Number(c.dc_igst_perc || 0),
           isBatchItem: false,
-          maxStockQty: bar.qty || 1,
+          maxStockQty: qty,
         };
       });
 
@@ -827,6 +1223,17 @@ function formatShortRefNarration(invNo?: string, dateStr?: string): string {
       }
 
       setReturnInvoiceNo(invNo);
+      setReturnInvoiceDate(
+        invRecord.rr_bill_date
+          ? new Date(invRecord.rr_bill_date).toISOString().split("T")[0]
+          : returnInvoiceDate
+      );
+      setCustomerName(invRecord.cust_name || "Cash Customer");
+      setCustomerMobile(invRecord.rr_ph_no || "");
+      setCustomerAddress(invRecord.city || "");
+      setCustomerGstNo(invRecord.gstin || "");
+      setCustomerState(invRecord.state || "Tamil Nadu");
+      setCustomerStateCode(invRecord.state_code || "33");
       setGridRows(loadedRows);
       setMode("edit");
     } catch (e: any) {
@@ -836,24 +1243,38 @@ function formatShortRefNarration(invNo?: string, dateStr?: string): string {
     }
   };
 
+  // Previous Invoice Navigation: moves towards older invoice in descending sequence
   const handlePrevInvoice = () => {
     if (savedReturnInvoices.length === 0) {
-      alert("No previous saved POS return invoices found.");
+      alert("No saved Retail POS Sales Return invoices found.");
       return;
     }
-    const newIdx = currentIndex <= 0 ? savedReturnInvoices.length - 1 : currentIndex - 1;
+    let newIdx: number;
+    if (currentIndex < 0) {
+      newIdx = 0; // In Add Mode, load the latest return invoice
+    } else if (currentIndex >= savedReturnInvoices.length - 1) {
+      newIdx = savedReturnInvoices.length - 1;
+    } else {
+      newIdx = currentIndex + 1; // move towards older invoice in descending list
+    }
     setCurrentIndex(newIdx);
     loadSavedInvoiceRecord(savedReturnInvoices[newIdx]);
   };
 
+  // Next Invoice Navigation: moves towards newer invoice in descending sequence
   const handleNextInvoice = () => {
     if (savedReturnInvoices.length === 0) {
-      alert("No next saved POS return invoices found.");
+      alert("No saved Retail POS Sales Return invoices found.");
       return;
     }
-    const newIdx = currentIndex >= savedReturnInvoices.length - 1 ? 0 : currentIndex + 1;
-    setCurrentIndex(newIdx);
-    loadSavedInvoiceRecord(savedReturnInvoices[newIdx]);
+    if (currentIndex <= 0) {
+      // Already at latest invoice, transition to Add New Mode
+      handleResetForm();
+    } else {
+      const newIdx = currentIndex - 1; // move towards newer invoice in descending list
+      setCurrentIndex(newIdx);
+      loadSavedInvoiceRecord(savedReturnInvoices[newIdx]);
+    }
   };
 
   // Reset Form
@@ -882,7 +1303,8 @@ function formatShortRefNarration(invNo?: string, dateStr?: string): string {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
-        setIsStockModalOpen(false);
+        setIsSoldItemsModalOpen(false);
+        setIsReturnSearchModalOpen(false);
         setIsPaymentModalOpen(false);
         setIsCustomerModalOpen(false);
       } else if (e.key === "Insert") {
@@ -893,21 +1315,23 @@ function formatShortRefNarration(invNo?: string, dateStr?: string): string {
         if (mode === "edit") {
           handleOpenPaymentModal();
         } else {
-          alert("Edit mode is active when viewing a saved return record (via Prev/Next).");
+          alert("Edit mode is active when viewing a saved return record (via Prev/Next/Search).");
         }
       } else if (e.key === "F3") {
         e.preventDefault();
-        setIsStockModalOpen(true);
+        setSelectedReturnRowIndex(0);
+        setIsReturnSearchModalOpen(true);
       } else if (e.key === "F4") {
         e.preventDefault();
         handleResetForm();
       } else if (e.key === "F5") {
         e.preventDefault();
-        if (isStockModalOpen && stockItems[selectedStockRowIndex]) {
-          addStockItemToGrid(stockItems[selectedStockRowIndex]);
-          setIsStockModalOpen(false);
+        if (isSoldItemsModalOpen && filteredSoldItems[selectedSoldRowIndex]) {
+          addSoldItemToGrid(filteredSoldItems[selectedSoldRowIndex]);
+          setIsSoldItemsModalOpen(false);
         } else {
-          setIsStockModalOpen(true);
+          setSelectedSoldRowIndex(0);
+          setIsSoldItemsModalOpen(true);
         }
       } else if (e.key === "F6") {
         e.preventDefault();
@@ -938,17 +1362,17 @@ function formatShortRefNarration(invNo?: string, dateStr?: string): string {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [gridRows, totals.grandTotal, isPaymentModalOpen, isStockModalOpen, stockItems, selectedStockRowIndex, savedReturnInvoices, currentIndex, mode]);
+  }, [gridRows, totals.grandTotal, isPaymentModalOpen, isSoldItemsModalOpen, isReturnSearchModalOpen, filteredSoldItems, selectedSoldRowIndex, savedReturnInvoices, currentIndex, mode]);
 
   return (
     <div className="min-h-screen bg-slate-200 dark:bg-slate-900 p-1.5 space-y-1.5 font-sans text-xs">
-      {/* Top POS Sales Return Red Banner (Matching Reference Image) */}
+      {/* Top Retail POS Sales Return Banner */}
       <div className="bg-gradient-to-r from-red-600 to-amber-600 text-white px-3 py-1.5 rounded flex items-center justify-between shadow-sm">
         <div className="flex items-center gap-2">
           <div className="bg-white text-red-600 rounded-full w-6 h-6 flex items-center justify-center font-black text-sm">
             ➔
           </div>
-          <h1 className="text-base font-black tracking-tight">Sale Return</h1>
+          <h1 className="text-base font-black tracking-tight">Retail POS Sales Return</h1>
           <span className="text-xs font-bold text-amber-100 pl-2">
             {mode === "add" ? "Add New Mode" : "Edit Mode"}
           </span>
@@ -993,20 +1417,10 @@ function formatShortRefNarration(invNo?: string, dateStr?: string): string {
             <Button
               size="sm"
               className="h-7 text-xs bg-slate-300 hover:bg-slate-400 text-slate-900 font-bold border"
-              onClick={async () => {
-                if (!company?.frm_code) return;
-                const { data } = await supabase
-                  .from("bar_temp")
-                  .select("*")
-                  .eq("frm_code", company.frm_code)
-                  .not("inv_no", "is", null)
-                  .neq("inv_no", "")
-                  .limit(40);
-                if (data) {
-                  setStockItems(data);
-                  setSelectedStockRowIndex(0);
-                  setIsStockModalOpen(true);
-                }
+              onClick={() => {
+                setSoldItemSearchTerm("");
+                setSelectedSoldRowIndex(0);
+                setIsSoldItemsModalOpen(true);
               }}
             >
               Select [F5]
@@ -1014,7 +1428,11 @@ function formatShortRefNarration(invNo?: string, dateStr?: string): string {
             <Button
               size="sm"
               className="h-7 text-xs bg-slate-300 hover:bg-slate-400 text-slate-900 font-bold border"
-              onClick={() => handleScanProductCode()}
+              onClick={() => {
+                setReturnSearchTerm("");
+                setSelectedReturnRowIndex(0);
+                setIsReturnSearchModalOpen(true);
+              }}
             >
               Search [F3]
             </Button>
@@ -1051,7 +1469,7 @@ function formatShortRefNarration(invNo?: string, dateStr?: string): string {
                   {gridRows.length === 0 ? (
                     <TableRow>
                       <TableCell colSpan={13} className="text-center p-12 text-slate-400 font-bold">
-                        Scan Customer Returned Saree Barcode or Product Code above to add to Sales Return invoice.
+                        Scan Customer Returned Saree Barcode or Click Select [F5] above to add to Sales Return invoice.
                       </TableCell>
                     </TableRow>
                   ) : (
@@ -1317,7 +1735,7 @@ function formatShortRefNarration(invNo?: string, dateStr?: string): string {
         </div>
       </div>
 
-      {/* BOTTOM ACTION BUTTONS TOOLBAR (Save button removed; record saved inside Payment Details [F8]) */}
+      {/* BOTTOM ACTION BUTTONS TOOLBAR */}
       <div className="bg-white dark:bg-slate-800 p-1.5 rounded border flex flex-wrap items-center justify-between gap-2 shadow-sm">
         <div className="flex flex-wrap items-center gap-1.5">
           <Button
@@ -1334,7 +1752,7 @@ function formatShortRefNarration(invNo?: string, dateStr?: string): string {
               if (mode === "edit") {
                 handleOpenPaymentModal();
               } else {
-                alert("Edit mode is active when viewing a saved return record (via Prev/Next).");
+                alert("Edit mode is active when viewing a saved return record (via Prev/Next/Search).");
               }
             }}
           >
@@ -1394,83 +1812,137 @@ function formatShortRefNarration(invNo?: string, dateStr?: string): string {
         </div>
       </div>
 
-      {/* STOCK SELECTION MODAL [F5] */}
-      <Dialog open={isStockModalOpen} onOpenChange={setIsStockModalOpen}>
-        <DialogContent className="max-w-4xl p-0 border">
-          <div className="bg-slate-200 dark:bg-slate-700 px-3 py-1.5 font-bold text-xs border-b text-slate-900 dark:text-slate-100 flex justify-between items-center">
-            <span>Stock : Sarees / Return Items</span>
-          </div>
-
-          <div className="p-2 max-h-[420px] overflow-y-auto">
-            <Table className="w-full text-xs font-mono border-collapse">
-              <TableHeader className="bg-slate-100 dark:bg-slate-800 font-bold border-b">
-                <TableRow>
-                  <TableHead className="w-10 text-center p-1 font-bold">SNo</TableHead>
-                  <TableHead className="w-24 p-1 font-bold">Batch Name</TableHead>
-                  <TableHead className="w-16 text-center p-1 font-bold">Stock</TableHead>
-                  <TableHead className="w-20 text-right p-1 font-bold">P.Rate</TableHead>
-                  <TableHead className="w-20 text-right p-1 font-bold">Cost Rate</TableHead>
-                  <TableHead className="w-16 text-right p-1 font-bold">MarkUp</TableHead>
-                  <TableHead className="w-20 text-right p-1 font-bold text-amber-800 dark:text-amber-400">Sale Rate</TableHead>
-                  <TableHead className="w-20 text-right p-1 font-bold">Purchase Qty</TableHead>
-                  <TableHead className="w-24 p-1 font-bold">Date</TableHead>
-                  <TableHead className="w-20 p-1 font-bold">Doc No</TableHead>
-                  <TableHead className="p-1 font-bold">Account Name / Supplier</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {stockItems.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={11} className="text-center p-6 text-slate-400">
-                      No stock items found.
-                    </TableCell>
-                  </TableRow>
-                ) : (
-                  stockItems.map((item, idx) => {
-                    const isSelected = idx === selectedStockRowIndex;
-                    return (
-                      <TableRow
-                        key={item.bar_ref_id || idx}
-                        onClick={() => {
-                          setSelectedStockRowIndex(idx);
-                          addStockItemToGrid(item);
-                          setIsStockModalOpen(false);
-                        }}
-                        className={`cursor-pointer transition-colors ${
-                          isSelected ? "bg-amber-200 dark:bg-amber-900/60 font-bold border-2 border-amber-500" : "hover:bg-slate-100 dark:hover:bg-slate-800"
-                        }`}
-                      >
-                        <TableCell className="text-center p-1">{idx + 1}</TableCell>
-                        <TableCell className="p-1 font-bold text-amber-800 dark:text-amber-300">{item.bar_no}</TableCell>
-                        <TableCell className="text-center p-1 font-black">{item.qty || 1}</TableCell>
-                        <TableCell className="text-right p-1">{(item.pc_pur_rate || 1200).toFixed(2)}</TableCell>
-                        <TableCell className="text-right p-1">{(item.cost_rate || 1200).toFixed(2)}</TableCell>
-                        <TableCell className="text-right p-1">{(item.markup || 100).toFixed(2)}</TableCell>
-                        <TableCell className="text-right p-1 font-black text-amber-800 dark:text-amber-300">{(item.pc_sale_rate || 2000).toFixed(2)}</TableCell>
-                        <TableCell className="text-right p-1">{(item.qty || 1).toFixed(2)}</TableCell>
-                        <TableCell className="p-1">{item.bar_date || returnInvoiceDate}</TableCell>
-                        <TableCell className="p-1">123</TableCell>
-                        <TableCell className="p-1 font-bold text-slate-800 dark:text-slate-100">{item.cr_code || "SRI KRISHNA SILKS"}</TableCell>
-                      </TableRow>
-                    );
-                  })
-                )}
-              </TableBody>
-            </Table>
-          </div>
-
-          <div className="bg-slate-100 p-2 border-t flex justify-between items-center text-xs">
-            <span className="font-bold text-slate-600">
-              Total Items: {stockItems.length} (Use Up/Down Arrow keys, Enter or Proceed [F5])
+      {/* SOLD ITEMS SELECTION MODAL [F5] */}
+      <Dialog open={isSoldItemsModalOpen} onOpenChange={setIsSoldItemsModalOpen}>
+        <DialogContent className="max-w-5xl max-h-[85vh] p-0 border">
+          <div className="bg-gradient-to-r from-red-600 to-amber-600 text-white px-3 py-2 font-bold text-xs flex justify-between items-center shadow-sm">
+            <span className="text-sm font-bold flex items-center gap-2">
+              <span>🛒</span> Select Sold Item [F5]
             </span>
-            <div className="flex gap-2 font-bold">
+            <span className="text-xs bg-red-800/80 px-2 py-0.5 rounded font-mono">
+              {filteredSoldItems.length} Sold Items Available
+            </span>
+          </div>
+
+          <div className="p-3 space-y-2">
+            <Input
+              value={soldItemSearchTerm}
+              onChange={(e) => {
+                setSoldItemSearchTerm(e.target.value);
+                setSelectedSoldRowIndex(0);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  if (filteredSoldItems[selectedSoldRowIndex]) {
+                    addSoldItemToGrid(filteredSoldItems[selectedSoldRowIndex]);
+                    setIsSoldItemsModalOpen(false);
+                  }
+                } else if (e.key === "ArrowDown") {
+                  e.preventDefault();
+                  setSelectedSoldRowIndex((prev) =>
+                    Math.min(prev + 1, filteredSoldItems.length - 1)
+                  );
+                } else if (e.key === "ArrowUp") {
+                  e.preventDefault();
+                  setSelectedSoldRowIndex((prev) => Math.max(prev - 1, 0));
+                }
+              }}
+              placeholder="Search by Batch No / Barcode, Inv No, Product Name, Customer, Date..."
+              className="h-8 text-xs bg-background font-medium"
+              autoFocus
+            />
+
+            <div className="overflow-y-auto max-h-[380px] border rounded">
+              <Table className="w-full text-xs border-collapse font-mono">
+                <TableHeader className="bg-slate-100 dark:bg-slate-800 font-bold sticky top-0 border-b">
+                  <TableRow>
+                    <TableHead className="w-10 text-center p-1 font-bold">SNo</TableHead>
+                    <TableHead className="w-24 p-1 font-bold">Batch No</TableHead>
+                    <TableHead className="min-w-[160px] p-1 font-bold">Product Name</TableHead>
+                    <TableHead className="w-16 text-right p-1 font-bold">Outward Qty</TableHead>
+                    <TableHead className="w-24 text-center p-1 font-bold">OutWard Date</TableHead>
+                    <TableHead className="w-24 p-1 font-bold">Inv No 1</TableHead>
+                    <TableHead className="w-24 text-right p-1 font-bold">Taxable Amt</TableHead>
+                    <TableHead className="w-24 text-right p-1 font-bold text-red-700 dark:text-red-400">Net Amount</TableHead>
+                    <TableHead className="w-32 p-1 font-bold">Customer Name</TableHead>
+                  </TableRow>
+                </TableHeader>
+
+                <TableBody className="text-xs">
+                  {filteredSoldItems.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={9} className="text-center py-8 text-muted-foreground">
+                        No sold items found matching query.
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    filteredSoldItems.map((item, idx) => {
+                      const isSelected = selectedSoldRowIndex === idx;
+                      return (
+                        <TableRow
+                          key={item.id || idx}
+                          ref={(el) => {
+                            soldRowRefs.current[idx] = el;
+                          }}
+                          className={`cursor-pointer transition-colors ${
+                            isSelected
+                              ? "bg-amber-200 dark:bg-amber-950/60 text-slate-950 dark:text-amber-100 font-bold border-2 border-amber-500 shadow-inner"
+                              : "hover:bg-muted/50"
+                          }`}
+                          onClick={() => setSelectedSoldRowIndex(idx)}
+                          onDoubleClick={() => {
+                            addSoldItemToGrid(item);
+                            setIsSoldItemsModalOpen(false);
+                          }}
+                        >
+                          <TableCell className="text-center p-1">{idx + 1}</TableCell>
+                          <TableCell className="p-1 font-bold text-amber-800 dark:text-amber-300">
+                            {item.batchNo}
+                          </TableCell>
+                          <TableCell className="p-1 font-semibold">
+                            {item.productName}
+                          </TableCell>
+                          <TableCell className="text-right p-1 font-bold">
+                            {(item.outwardQty || 1).toFixed(2)}
+                          </TableCell>
+                          <TableCell className="text-center p-1">
+                            {item.outwardDate || "-"}
+                          </TableCell>
+                          <TableCell className="p-1 font-bold text-lime-700 dark:text-lime-400">
+                            {item.invNo || "-"}
+                          </TableCell>
+                          <TableCell className="text-right p-1">
+                            ₹{(item.taxableAmt || 0).toFixed(2)}
+                          </TableCell>
+                          <TableCell className="text-right font-bold text-red-700 dark:text-red-400 p-1">
+                            ₹{(item.netAmount || 0).toFixed(2)}
+                          </TableCell>
+                          <TableCell className="p-1">
+                            {item.customerName || "Cash Customer"}
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })
+                  )}
+                </TableBody>
+              </Table>
+            </div>
+          </div>
+
+          <div className="bg-slate-100 dark:bg-slate-800 p-2 border-t flex justify-between items-center text-xs font-mono font-bold">
+            <span className="text-[11px] text-muted-foreground">
+              (Use Up/Down Arrow keys to navigate, Double-click or Press Enter to select sold item)
+            </span>
+
+            <div className="flex gap-2">
               <Button
                 size="sm"
-                className="h-7 text-xs bg-amber-600 hover:bg-amber-700 text-white px-4"
+                className="h-7 text-xs bg-amber-600 hover:bg-amber-700 text-white font-bold px-4 shadow"
                 onClick={() => {
-                  if (stockItems[selectedStockRowIndex]) {
-                    addStockItemToGrid(stockItems[selectedStockRowIndex]);
-                    setIsStockModalOpen(false);
+                  if (filteredSoldItems[selectedSoldRowIndex]) {
+                    addSoldItemToGrid(filteredSoldItems[selectedSoldRowIndex]);
+                    setIsSoldItemsModalOpen(false);
                   }
                 }}
               >
@@ -1479,8 +1951,166 @@ function formatShortRefNarration(invNo?: string, dateStr?: string): string {
               <Button
                 size="sm"
                 variant="outline"
-                className="h-7 text-xs text-red-600"
-                onClick={() => setIsStockModalOpen(false)}
+                className="h-7 text-xs text-red-600 font-bold px-4"
+                onClick={() => setIsSoldItemsModalOpen(false)}
+              >
+                Cancel [Esc]
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* RETAIL POS SALES RETURN INVOICE SEARCH MODAL [F3] (Descending order as per Image 2) */}
+      <Dialog open={isReturnSearchModalOpen} onOpenChange={setIsReturnSearchModalOpen}>
+        <DialogContent className="max-w-5xl max-h-[85vh] p-0 border">
+          <div className="bg-lime-600 text-white px-3 py-2 font-bold text-xs flex justify-between items-center shadow-sm">
+            <span className="text-sm font-bold flex items-center gap-2">
+              <span>🔍</span> Search Retail POS Sales Return Invoices [F3]
+            </span>
+            <span className="text-xs bg-lime-700/80 px-2 py-0.5 rounded font-mono">
+              {filteredReturnInvoices.length} Invoices Found
+            </span>
+          </div>
+
+          <div className="p-3 space-y-2">
+            <Input
+              value={returnSearchTerm}
+              onChange={(e) => {
+                setReturnSearchTerm(e.target.value);
+                setSelectedReturnRowIndex(0);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  if (filteredReturnInvoices[selectedReturnRowIndex]) {
+                    const selected = filteredReturnInvoices[selectedReturnRowIndex];
+                    const originalIdx = savedReturnInvoices.findIndex(
+                      (s) => s.rr_bill_ref_no === selected.rr_bill_ref_no
+                    );
+                    setCurrentIndex(originalIdx >= 0 ? originalIdx : 0);
+                    loadSavedInvoiceRecord(selected);
+                    setIsReturnSearchModalOpen(false);
+                  }
+                } else if (e.key === "ArrowDown") {
+                  e.preventDefault();
+                  setSelectedReturnRowIndex((prev) =>
+                    Math.min(prev + 1, filteredReturnInvoices.length - 1)
+                  );
+                } else if (e.key === "ArrowUp") {
+                  e.preventDefault();
+                  setSelectedReturnRowIndex((prev) => Math.max(prev - 1, 0));
+                }
+              }}
+              placeholder="Search by Invoice No (e.g. POS-SR-000001), Customer Name, Phone, Date..."
+              className="h-8 text-xs bg-background font-medium"
+              autoFocus
+            />
+
+            <div className="overflow-y-auto max-h-[380px] border rounded">
+              <Table className="w-full text-xs border-collapse font-mono">
+                <TableHeader className="bg-slate-100 dark:bg-slate-800 font-bold sticky top-0 border-b">
+                  <TableRow>
+                    <TableHead className="w-10 text-center p-1 font-bold">SNo</TableHead>
+                    <TableHead className="w-28 p-1 font-bold">Invoice No</TableHead>
+                    <TableHead className="w-24 text-center p-1 font-bold">Date</TableHead>
+                    <TableHead className="p-1 font-bold min-w-[160px]">Customer Name</TableHead>
+                    <TableHead className="w-28 p-1 font-bold">Phone</TableHead>
+                    <TableHead className="w-16 text-right p-1 font-bold">Qty</TableHead>
+                    <TableHead className="w-24 text-right p-1 font-bold">Taxable Amt</TableHead>
+                    <TableHead className="w-20 text-right p-1 font-bold">Tax</TableHead>
+                    <TableHead className="w-24 text-right p-1 font-bold text-red-700 dark:text-red-400">Net Amount</TableHead>
+                    <TableHead className="w-20 text-center p-1 font-bold">Pay Mode</TableHead>
+                  </TableRow>
+                </TableHeader>
+
+                <TableBody className="text-xs">
+                  {filteredReturnInvoices.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={10} className="text-center py-8 text-muted-foreground">
+                        No Retail POS Sales Return invoices found.
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    filteredReturnInvoices.map((inv, idx) => {
+                      const isSelected = selectedReturnRowIndex === idx;
+                      const invDateFormatted = inv.rr_bill_date
+                        ? new Date(inv.rr_bill_date).toISOString().split("T")[0]
+                        : "-";
+                      const totTax = (inv.rr_cgst_amt || 0) + (inv.rr_sgst_amt || 0) + (inv.rr_igst_amt || 0);
+
+                      return (
+                        <TableRow
+                          key={inv.rr_ref_no ? `ret-${inv.rr_ref_no}` : `ret-${inv.rr_bill_ref_no}-${idx}`}
+                          ref={(el) => {
+                            returnRowRefs.current[idx] = el;
+                          }}
+                          className={`cursor-pointer transition-colors ${
+                            isSelected
+                              ? "bg-lime-100 dark:bg-lime-950/60 text-slate-950 dark:text-lime-100 font-bold border-2 border-lime-500"
+                              : "hover:bg-muted/50"
+                          }`}
+                          onClick={() => setSelectedReturnRowIndex(idx)}
+                          onDoubleClick={() => {
+                            const originalIdx = savedReturnInvoices.findIndex(
+                              (s) => s.rr_bill_ref_no === inv.rr_bill_ref_no
+                            );
+                            setCurrentIndex(originalIdx >= 0 ? originalIdx : 0);
+                            loadSavedInvoiceRecord(inv);
+                            setIsReturnSearchModalOpen(false);
+                          }}
+                        >
+                          <TableCell className="text-center p-1">{idx + 1}</TableCell>
+                          <TableCell className="p-1 font-bold text-lime-700 dark:text-lime-400">
+                            {inv.rr_bill_ref_no || `POS-SR-${inv.rr_ref_no}`}
+                          </TableCell>
+                          <TableCell className="text-center p-1">{invDateFormatted}</TableCell>
+                          <TableCell className="p-1 font-semibold">{inv.cust_name || "Cash Customer"}</TableCell>
+                          <TableCell className="p-1">{inv.rr_ph_no || "-"}</TableCell>
+                          <TableCell className="text-right p-1 font-bold">{(inv.rr_tot_qty || 1).toFixed(2)}</TableCell>
+                          <TableCell className="text-right p-1">₹{(inv.rr_bf_gst_amt || 0).toFixed(2)}</TableCell>
+                          <TableCell className="text-right p-1">₹{totTax.toFixed(2)}</TableCell>
+                          <TableCell className="text-right font-bold text-red-700 dark:text-red-400 p-1">
+                            ₹{(inv.rr_net_total || 0).toFixed(2)}
+                          </TableCell>
+                          <TableCell className="text-center p-1 font-bold">{inv.rr_mode_one || "CASH"}</TableCell>
+                        </TableRow>
+                      );
+                    })
+                  )}
+                </TableBody>
+              </Table>
+            </div>
+          </div>
+
+          <div className="bg-slate-100 dark:bg-slate-800 p-2 border-t flex justify-between items-center text-xs font-mono font-bold">
+            <span className="text-[11px] text-muted-foreground">
+              (Use Up/Down Arrow keys to navigate, Double-click or Press Enter to load invoice)
+            </span>
+
+            <div className="flex gap-2">
+              <Button
+                size="sm"
+                className="h-7 text-xs bg-lime-600 hover:bg-lime-700 text-white font-bold px-4 shadow"
+                onClick={() => {
+                  if (filteredReturnInvoices[selectedReturnRowIndex]) {
+                    const selected = filteredReturnInvoices[selectedReturnRowIndex];
+                    const originalIdx = savedReturnInvoices.findIndex(
+                      (s) => s.rr_bill_ref_no === selected.rr_bill_ref_no
+                    );
+                    setCurrentIndex(originalIdx >= 0 ? originalIdx : 0);
+                    loadSavedInvoiceRecord(selected);
+                    setIsReturnSearchModalOpen(false);
+                  }
+                }}
+              >
+                Load Invoice [Enter]
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 text-xs text-red-600 font-bold px-4"
+                onClick={() => setIsReturnSearchModalOpen(false)}
               >
                 Cancel [Esc]
               </Button>
