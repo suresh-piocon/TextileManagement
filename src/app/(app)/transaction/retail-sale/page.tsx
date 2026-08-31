@@ -141,7 +141,9 @@ export default function RetailSalePOSPage() {
   const [stockItems, setStockItems] = useState<any[]>([]);
   const [savedInvoices, setSavedInvoices] = useState<any[]>([]);
   const [currentIndex, setCurrentIndex] = useState<number>(-1);
-  const [productTaxMap, setProductTaxMap] = useState<Map<string, { gstPerc: number; hsnCode: string }>>(new Map());
+  const [productTaxMap, setProductTaxMap] = useState<
+    Map<string, { refNo?: number; prdCode?: string; prdName?: string; gstPerc: number; hsnCode: string; units?: string; grpCode?: number }>
+  >(new Map());
 
   // Main POS Grid Rows
   const [gridRows, setGridRows] = useState<POSGridRow[]>([]);
@@ -223,7 +225,7 @@ export default function RetailSalePOSPage() {
           .order("ledg_name", { ascending: true }),
         supabase
           .from("product")
-          .select("prd_code, prd_name, gst_perc, hsn_code")
+          .select("ref_no, prd_code, prd_name, gst_perc, hsn_code, units, grp_code")
           .eq("frm_code", company.frm_code)
       ]);
 
@@ -233,13 +235,20 @@ export default function RetailSalePOSPage() {
         cRes.data.forEach((l) => ledgMap.set(l.ledg_code, l.ledg_name));
       }
 
-      const prodMap = new Map<string, { gstPerc: number; hsnCode: string }>();
+      const prodMap = new Map<string, any>();
       if (prodRes.data) {
         prodRes.data.forEach((p) => {
-          prodMap.set(String(p.prd_code), {
+          const val = {
+            refNo: p.ref_no,
+            prdCode: String(p.prd_code),
+            prdName: p.prd_name || `SAREES-${p.hsn_code || "50079010"}`,
             gstPerc: p.gst_perc || 5,
             hsnCode: p.hsn_code || "50079010",
-          });
+            units: p.units || "NOS",
+            grpCode: p.grp_code || 1,
+          };
+          prodMap.set(String(p.ref_no), val);
+          prodMap.set(String(p.prd_code), val);
         });
       }
       setProductTaxMap(prodMap);
@@ -247,7 +256,7 @@ export default function RetailSalePOSPage() {
       // 2. Fetch Available Barcodes from bar_temp and attach exact Supplier / Vendor Name
       const { data: barData } = await supabase
         .from("bar_temp")
-        .select("*")
+        .select("*, product(ref_no, prd_code, prd_name, hsn_code, units, gst_perc, grp_code)")
         .eq("frm_code", company.frm_code)
         .eq("sold_status", "A")
         .order("bar_ref_id", { ascending: true });
@@ -266,7 +275,7 @@ export default function RetailSalePOSPage() {
       // 3. Fetch Saved Retail POS Sales Invoices for Previous / Next Navigation & F3 Search
       const { data: saleMastList } = await supabase
         .from("retail_sale_mast")
-        .select("*, retail_sale_child(*)")
+        .select("*, retail_sale_child(*, product(ref_no, prd_code, prd_name, hsn_code, units, gst_perc, grp_code))")
         .eq("rm_frm_code", company.frm_code)
         .order("rm_ref_no", { ascending: true });
 
@@ -374,9 +383,17 @@ export default function RetailSalePOSPage() {
 
   // Add Item to POS Grid - Fetches Product GST tax rates & HSN code dynamically
   const addStockItemToGrid = (bar: any) => {
-    const saleRateMrp = Number(bar.pc_sale_rate || 2000);
-    const prcodeStr = String(bar.prcode || 101);
-    const taxInfo = productTaxMap.get(prcodeStr) || { gstPerc: 5, hsnCode: "50079010" };
+    const saleRateMrp = Number(bar.pc_sale_rate || bar.tag_rate || bar.product?.sales_price || 2000);
+    const prcodeStr = String(bar.prcode || bar.product?.ref_no || 1);
+    const taxInfo = productTaxMap.get(prcodeStr) || {
+      refNo: bar.prcode || 1,
+      prdCode: "101",
+      prdName: bar.grp_name || "SAREES",
+      gstPerc: 5,
+      hsnCode: "50079010",
+      units: bar.unit_name || "NOS",
+      grpCode: 1,
+    };
     const gstPerc = taxInfo.gstPerc || 5;
     const halfTax = gstPerc / 2;
 
@@ -385,11 +402,11 @@ export default function RetailSalePOSPage() {
       sno: gridRows.length + 1,
       productCode: bar.bar_no,
       batchNo: bar.bar_no,
-      prcode: bar.prcode || 101,
-      productName: `${bar.grp_name || "Sarees"}-${taxInfo.hsnCode}`,
+      prcode: taxInfo.refNo || bar.prcode || 1,
+      productName: taxInfo.prdName || `${bar.grp_name || "Sarees"}-${taxInfo.hsnCode}`,
       hsnCode: taxInfo.hsnCode,
       qty: 1,
-      unitName: bar.unit_name || "Nos",
+      unitName: bar.unit_name || taxInfo.units || "NOS",
       gross: 1,
       mrp: saleRateMrp,
       rateUnit: saleRateMrp,
@@ -680,27 +697,30 @@ export default function RetailSalePOSPage() {
         rmRefNo = newMast.rm_ref_no;
       }
 
-      // 2. Insert into retail_sale_child
-      const childPayload = gridRows.map((r) => ({
-        rm_ref_no: rmRefNo,
-        dc_bar_no: r.productCode || r.batchNo,
-        dc_prcode: r.prcode || 101,
-        dc_pgrcode: 1,
-        dc_qty: r.qty,
-        dc_rate: r.rateUnit,
-        dc_net_tot: r.amount,
-        dc_cgst_perc: r.cgstPerc,
-        dc_cgst_amnt: Number(((r.amount * r.cgstPerc) / 100).toFixed(2)),
-        dc_sgst_perc: r.sgstPerc,
-        dc_sgst_amnt: Number(((r.amount * r.sgstPerc) / 100).toFixed(2)),
-        dc_igst_perc: r.igstPerc || 0,
-        dc_igst_amnt: 0,
-        frm_code: company.frm_code,
-        prd_name: r.productName,
-      }));
+      // 2. Insert into retail_sale_child (strictly matching database schema)
+      const childPayload = gridRows.map((r) => {
+        const prdInfo = productTaxMap.get(String(r.prcode));
+        return {
+          rm_ref_no: rmRefNo,
+          dc_bar_no: r.productCode || r.batchNo,
+          dc_prcode: prdInfo?.refNo || (typeof r.prcode === "number" ? r.prcode : 1),
+          dc_pgrcode: prdInfo?.grpCode || 1,
+          dc_qty: r.qty,
+          dc_rate: r.rateUnit,
+          dc_net_tot: r.amount,
+          dc_cgst_perc: r.cgstPerc,
+          dc_cgst_amnt: Number(((r.amount * r.cgstPerc) / 100).toFixed(2)),
+          dc_sgst_perc: r.sgstPerc,
+          dc_sgst_amnt: Number(((r.amount * r.sgstPerc) / 100).toFixed(2)),
+          dc_igst_perc: r.igstPerc || 0,
+          dc_igst_amnt: 0,
+          frm_code: company.frm_code,
+        };
+      });
 
       if (childPayload.length > 0) {
-        await supabase.from("retail_sale_child").insert(childPayload);
+        const { error: cErr } = await supabase.from("retail_sale_child").insert(childPayload);
+        if (cErr) throw cErr;
       }
 
       // 3. Mark barcode records sold ('S') in bar_temp
@@ -989,37 +1009,75 @@ export default function RetailSalePOSPage() {
       if (!childItems || childItems.length === 0) {
         const { data: childData } = await supabase
           .from("retail_sale_child")
-          .select("*")
+          .select("*, product(ref_no, prd_code, prd_name, hsn_code, units, gst_perc, grp_code)")
           .eq("rm_ref_no", invMast.rm_ref_no)
           .order("dc_ref_no", { ascending: true });
         childItems = childData || [];
       }
 
+      // If child items still empty, check bar_temp for items matching this invoice
+      if (childItems.length === 0) {
+        const { data: barFallback } = await supabase
+          .from("bar_temp")
+          .select("*, product(ref_no, prd_code, prd_name, hsn_code, units, gst_perc, grp_code)")
+          .eq("frm_code", company.frm_code)
+          .eq("sold_status", "S")
+          .order("bar_ref_id", { ascending: true });
+
+        if (barFallback && barFallback.length > 0) {
+          childItems = barFallback.slice(0, Math.max(1, Math.floor(invMast.rm_tot_qty || 1))).map((b) => ({
+            dc_bar_no: b.bar_no,
+            dc_prcode: b.prcode || b.product?.ref_no || 1,
+            dc_pgrcode: b.product?.grp_code || 1,
+            dc_qty: b.qty || 1,
+            dc_rate: b.pc_sale_rate || b.product?.sales_price || 2000,
+            dc_net_tot: (b.qty || 1) * (b.pc_sale_rate || 2000),
+            dc_cgst_perc: 2.5,
+            dc_sgst_perc: 2.5,
+            product: b.product
+          }));
+        }
+      }
+
       const loadedRows: POSGridRow[] = (childItems || []).map((c: any, idx: number) => {
-        const prcodeStr = String(c.dc_prcode || 101);
-        const taxInfo = productTaxMap.get(prcodeStr) || { gstPerc: 5, hsnCode: "50079010" };
-        const halfTax = (c.dc_cgst_perc || taxInfo.gstPerc || 5) / 2;
+        const prd = c.product;
+        const prcodeStr = String(c.dc_prcode || prd?.ref_no || 1);
+        const taxInfo = productTaxMap.get(prcodeStr) || {
+          refNo: c.dc_prcode || 1,
+          prdCode: prd?.prd_code || "101",
+          prdName: prd?.prd_name || "SAREES-50079010",
+          gstPerc: 5,
+          hsnCode: prd?.hsn_code || "50079010",
+          units: prd?.units || "NOS",
+          grpCode: prd?.grp_code || 1,
+        };
+
+        const halfTax = Number(c.dc_cgst_perc || taxInfo.gstPerc / 2 || 2.5);
+        const qty = Number(c.dc_qty || 1);
+        const rate = Number(c.dc_rate || 0);
+        const amt = Number(c.dc_net_tot || (qty * rate));
+        const prdName = prd?.prd_name || taxInfo.prdName || `SAREES-${taxInfo.hsnCode}`;
 
         return {
           id: `pos-saved-${c.dc_bar_no || idx}-${idx}`,
           sno: idx + 1,
           productCode: c.dc_bar_no || "",
           batchNo: c.dc_bar_no || "",
-          prcode: c.dc_prcode || 101,
-          productName: c.prd_name || `Stock Item-${taxInfo.hsnCode}`,
+          prcode: taxInfo.refNo || c.dc_prcode || 1,
+          productName: prdName,
           hsnCode: taxInfo.hsnCode,
-          qty: c.dc_qty || 1,
-          unitName: "NOS",
+          qty: qty,
+          unitName: prd?.units || taxInfo.units || "NOS",
           gross: 1,
-          mrp: c.dc_rate || 2000,
-          rateUnit: c.dc_rate || 1500,
-          amount: c.dc_net_tot || ((c.dc_qty || 1) * (c.dc_rate || 0)),
+          mrp: rate,
+          rateUnit: rate,
+          amount: amt,
           disPerc: 0,
           sgstPerc: c.dc_sgst_perc || halfTax,
           cgstPerc: c.dc_cgst_perc || halfTax,
           igstPerc: c.dc_igst_perc || 0,
           isBatchItem: false,
-          maxStockQty: c.dc_qty || 1,
+          maxStockQty: qty,
         };
       });
 
@@ -1649,6 +1707,28 @@ export default function RetailSalePOSPage() {
               onChange={(e) => {
                 setInvoiceSearchTerm(e.target.value);
                 setSelectedInvoiceRowIndex(0);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  if (filteredInvoices[selectedInvoiceRowIndex]) {
+                    const selected = filteredInvoices[selectedInvoiceRowIndex];
+                    const originalIdx = savedInvoices.findIndex(
+                      (s) => s.rm_ref_no === selected.rm_ref_no
+                    );
+                    setCurrentIndex(originalIdx >= 0 ? originalIdx : 0);
+                    loadSavedInvoiceRecord(selected);
+                    setIsInvoiceSearchModalOpen(false);
+                  }
+                } else if (e.key === "ArrowDown") {
+                  e.preventDefault();
+                  setSelectedInvoiceRowIndex((prev) =>
+                    Math.min(prev + 1, filteredInvoices.length - 1)
+                  );
+                } else if (e.key === "ArrowUp") {
+                  e.preventDefault();
+                  setSelectedInvoiceRowIndex((prev) => Math.max(prev - 1, 0));
+                }
               }}
               placeholder="Search by Invoice No (e.g. POS-000001), Customer Name, Phone, Date..."
               className="h-8 text-xs bg-background font-medium"
