@@ -727,14 +727,16 @@ export default function RetailSalePOSPage() {
         if (cErr) throw cErr;
       }
 
-      // 3. Mark barcode records sold ('S') in bar_temp
+      // 3. Mark barcode records sold ('S') in bar_temp with new invoiceNo
       const barcodeList = gridRows.map((r) => r.productCode).filter(Boolean);
       if (barcodeList.length > 0) {
         await supabase
           .from("bar_temp")
           .update({
             sold_status: "S",
+            inv_no: invoiceNo,
             inv_date: invoiceDate,
+            category: null,
             margin: Number(cashDisc.toFixed(2)),
           })
           .in("bar_no", barcodeList)
