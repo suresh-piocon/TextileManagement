@@ -272,19 +272,23 @@ export default function RetailSalePOSPage() {
         );
       }
 
-      // 3. Fetch Saved Retail POS Sales Invoices for Previous / Next Navigation & F3 Search
+      // 3. Fetch Saved Retail POS Sales Invoices for Previous / Next Navigation & F3 Search (Descending: Latest First)
       const { data: saleMastList } = await supabase
         .from("retail_sale_mast")
         .select("*, retail_sale_child(*, product(ref_no, prd_code, prd_name, hsn_code, units, gst_perc, grp_code))")
         .eq("rm_frm_code", company.frm_code)
-        .order("rm_ref_no", { ascending: true });
+        .order("rm_ref_no", { ascending: false });
 
       const invoices = saleMastList || [];
       setSavedInvoices(invoices);
 
-      // Auto Invoice Number beginning at POS-000001 (based on saved POS sales count)
+      // Auto Invoice Number beginning at POS-000001 (based on highest invoice number sequence)
       if (mode === "add") {
-        const nextSeq = invoices.length + 1;
+        const maxSeq = invoices.reduce((max, inv) => {
+          const num = parseInt(String(inv.rm_bill_ref_no || "").replace(/\D+/g, "") || "0");
+          return Math.max(max, num);
+        }, invoices.length);
+        const nextSeq = maxSeq + 1;
         setInvoiceNo(`POS-${String(nextSeq).padStart(6, "0")}`);
       }
     } catch (e) {
@@ -1107,7 +1111,15 @@ export default function RetailSalePOSPage() {
       alert("No saved Retail POS Sales invoices found.");
       return;
     }
-    const newIdx = currentIndex <= 0 ? savedInvoices.length - 1 : currentIndex - 1;
+    // If currently in Add Mode, load the latest invoice (index 0)
+    let newIdx: number;
+    if (currentIndex < 0) {
+      newIdx = 0;
+    } else if (currentIndex >= savedInvoices.length - 1) {
+      newIdx = savedInvoices.length - 1;
+    } else {
+      newIdx = currentIndex + 1; // move towards older invoice in descending list
+    }
     setCurrentIndex(newIdx);
     loadSavedInvoiceRecord(savedInvoices[newIdx]);
   };
@@ -1117,9 +1129,14 @@ export default function RetailSalePOSPage() {
       alert("No saved Retail POS Sales invoices found.");
       return;
     }
-    const newIdx = currentIndex >= savedInvoices.length - 1 ? 0 : currentIndex + 1;
-    setCurrentIndex(newIdx);
-    loadSavedInvoiceRecord(savedInvoices[newIdx]);
+    if (currentIndex <= 0) {
+      // Already at latest invoice, move to Add New Mode
+      handleResetForm();
+    } else {
+      const newIdx = currentIndex - 1; // move towards newer invoice in descending list
+      setCurrentIndex(newIdx);
+      loadSavedInvoiceRecord(savedInvoices[newIdx]);
+    }
   };
 
   // Reset Form
