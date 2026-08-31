@@ -146,15 +146,19 @@ export default function RetailSalePOSPage() {
   // Main POS Grid Rows
   const [gridRows, setGridRows] = useState<POSGridRow[]>([]);
 
-  // Modals state: Stock Modal and Payment Modal (NEVER AUTO-OPEN ON LOAD)
+  // Modals state: Stock Modal, Payment Modal, and Invoice Search Modal [F3]
   const [isStockModalOpen, setIsStockModalOpen] = useState<boolean>(false);
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState<boolean>(false);
+  const [isInvoiceSearchModalOpen, setIsInvoiceSearchModalOpen] = useState<boolean>(false);
+  const [invoiceSearchTerm, setInvoiceSearchTerm] = useState<string>("");
+  const [selectedInvoiceRowIndex, setSelectedInvoiceRowIndex] = useState<number>(0);
+  const invoiceRowRefs = useRef<(HTMLTableRowElement | null)[]>([]);
 
   // Stock Modal Highlighted Row Index & Row Refs for Auto-Scroll Navigation
   const [selectedStockRowIndex, setSelectedStockRowIndex] = useState<number>(0);
   const stockRowRefs = useRef<(HTMLTableRowElement | null)[]>([]);
 
-  // Auto-scroll highlighted row into view when navigating with Up/Down Arrow keys
+  // Auto-scroll highlighted row into view when navigating with Up/Down Arrow keys in Stock Modal
   useEffect(() => {
     if (isStockModalOpen && stockRowRefs.current[selectedStockRowIndex]) {
       stockRowRefs.current[selectedStockRowIndex]?.scrollIntoView({
@@ -164,6 +168,16 @@ export default function RetailSalePOSPage() {
     }
   }, [selectedStockRowIndex, isStockModalOpen]);
 
+  // Auto-scroll highlighted row into view when navigating with Up/Down Arrow keys in Invoice Search Modal
+  useEffect(() => {
+    if (isInvoiceSearchModalOpen && invoiceRowRefs.current[selectedInvoiceRowIndex]) {
+      invoiceRowRefs.current[selectedInvoiceRowIndex]?.scrollIntoView({
+        behavior: "smooth",
+        block: "nearest",
+      });
+    }
+  }, [selectedInvoiceRowIndex, isInvoiceSearchModalOpen]);
+
   // Payment Breakdown Table
   const [paymentRows, setPaymentRows] = useState<PaymentRow[]>([
     { type: "CASH", amount: 0, remarks: "" },
@@ -172,11 +186,29 @@ export default function RetailSalePOSPage() {
     { type: "UPI / QR CODE", amount: 0, remarks: "" },
   ]);
 
+  // Filtered saved Retail POS Sales Invoices for F3 Lookup Search
+  const filteredInvoices = useMemo(() => {
+    const q = invoiceSearchTerm.trim().toLowerCase();
+    if (!q) return savedInvoices;
+    return savedInvoices.filter((inv) => {
+      const invNoStr = String(inv.rm_bill_ref_no || `POS-${inv.rm_ref_no}`).toLowerCase();
+      const custStr = String(inv.cust_name || "").toLowerCase();
+      const phoneStr = String(inv.rm_ph_no || "").toLowerCase();
+      const dateStr = inv.rm_bill_date ? String(inv.rm_bill_date).toLowerCase() : "";
+      return (
+        invNoStr.includes(q) ||
+        custStr.includes(q) ||
+        phoneStr.includes(q) ||
+        dateStr.includes(q)
+      );
+    });
+  }, [savedInvoices, invoiceSearchTerm]);
+
   // Focus Highlight Class
   const focusHighlightClass =
     "focus:bg-yellow-200 focus:text-slate-950 focus:ring-2 focus:ring-amber-500 font-medium transition-colors";
 
-  // Initial Fetch: Load Ledgers, Product GST Tax & HSN rates from DB, Available Barcodes, & Saved Invoices
+  // Initial Fetch: Load Ledgers, Product GST Tax & HSN rates from DB, Available Barcodes, & Saved POS Invoices
   const fetchInitialData = useCallback(async () => {
     if (!company?.frm_code) return;
     try {
@@ -231,22 +263,19 @@ export default function RetailSalePOSPage() {
         );
       }
 
-      // 3. Fetch Sold Barcodes for Previous / Next Navigation & Distinct Invoice List
-      const { data: soldData } = await supabase
-        .from("bar_temp")
-        .select("inv_no")
-        .eq("frm_code", company.frm_code)
-        .eq("sold_status", "S")
-        .order("bar_ref_id", { ascending: true });
+      // 3. Fetch Saved Retail POS Sales Invoices for Previous / Next Navigation & F3 Search
+      const { data: saleMastList } = await supabase
+        .from("retail_sale_mast")
+        .select("*, retail_sale_child(*)")
+        .eq("rm_frm_code", company.frm_code)
+        .order("rm_ref_no", { ascending: true });
 
-      const distinctInvoices = Array.from(
-        new Set((soldData || []).map((b) => b.inv_no).filter(Boolean))
-      );
-      setSavedInvoices(distinctInvoices);
+      const invoices = saleMastList || [];
+      setSavedInvoices(invoices);
 
-      // Auto Invoice Number beginning at POS-000001 (based on distinct saved invoice numbers)
+      // Auto Invoice Number beginning at POS-000001 (based on saved POS sales count)
       if (mode === "add") {
-        const nextSeq = distinctInvoices.length + 1;
+        const nextSeq = invoices.length + 1;
         setInvoiceNo(`POS-${String(nextSeq).padStart(6, "0")}`);
       }
     } catch (e) {
@@ -569,12 +598,12 @@ export default function RetailSalePOSPage() {
   const handlePaymentAmountChange = (idx: number, val: number) => {
     setPaymentRows((prev) => {
       const updated = [...prev];
-      updated[idx].amount = Math.max(0, val);
+  updated[idx].amount = Math.max(0, val);
       return updated;
     });
   };
 
-  // Confirm & Save POS Invoice with Financial Year Duplicate Check
+  // Confirm & Save POS Invoice with Financial Year Duplicate Check and retail_sale_mast insertion
   const handleFinalSaveInvoice = async () => {
     if (!company?.frm_code) return;
 
@@ -591,11 +620,10 @@ export default function RetailSalePOSPage() {
     try {
       if (mode === "add") {
         const { data: existing } = await supabase
-          .from("bar_temp")
-          .select("bar_no")
-          .eq("frm_code", company.frm_code)
-          .eq("sold_status", "S")
-          .eq("inv_no", invoiceNo);
+          .from("retail_sale_mast")
+          .select("rm_ref_no")
+          .eq("rm_frm_code", company.frm_code)
+          .eq("rm_bill_ref_no", invoiceNo);
 
         if (existing && existing.length > 0) {
           alert(
@@ -606,6 +634,76 @@ export default function RetailSalePOSPage() {
         }
       }
 
+      // 1. Save or Update retail_sale_mast
+      const mastPayload: any = {
+        rm_frm_code: company.frm_code,
+        rm_rec_no: mode === "edit" && currentIndex >= 0 && savedInvoices[currentIndex] ? (savedInvoices[currentIndex].rm_rec_no || currentIndex + 1) : (savedInvoices.length + 1),
+        rm_bill_ref_no: invoiceNo,
+        rm_bill_date: invoiceDate,
+        cust_name: customerName || "Cash Customer",
+        rm_ph_no: customerMobile || "",
+        state: customerState || "Tamil Nadu",
+        state_code: customerStateCode || "33",
+        gstin: customerGstNo || "",
+        city: customerAddress || "",
+        rm_tot_qty: totals.totalQty,
+        rm_bf_gst_amt: totals.taxableAmt,
+        rm_cgst_amt: totals.totCgst,
+        rm_sgst_amt: totals.totSgst,
+        rm_igst_amt: 0,
+        rm_grd_tot: totals.grandTotal,
+        rm_rnd_off: totals.roundOff,
+        rm_net_total: totals.grandTotal,
+        reg_code: 50,
+        rm_cr_code: 1,
+        rm_mode_one: paymentRows[0]?.type || "CASH",
+        rm_dr_code_one: 1,
+        rm_recd_one_amt: paymentRows[0]?.amount || totals.grandTotal,
+        rm_mode_two: paymentRows[1]?.type || "",
+        rm_dr_code_two: 0,
+        rm_recd_two_amt: paymentRows[1]?.amount || 0,
+      };
+
+      let rmRefNo: number;
+
+      if (mode === "edit" && currentIndex >= 0 && savedInvoices[currentIndex]?.rm_ref_no) {
+        rmRefNo = savedInvoices[currentIndex].rm_ref_no;
+        await supabase.from("retail_sale_mast").update(mastPayload).eq("rm_ref_no", rmRefNo);
+        await supabase.from("retail_sale_child").delete().eq("rm_ref_no", rmRefNo);
+      } else {
+        const { data: newMast, error: mErr } = await supabase
+          .from("retail_sale_mast")
+          .insert([mastPayload])
+          .select("rm_ref_no")
+          .single();
+        if (mErr) throw mErr;
+        rmRefNo = newMast.rm_ref_no;
+      }
+
+      // 2. Insert into retail_sale_child
+      const childPayload = gridRows.map((r) => ({
+        rm_ref_no: rmRefNo,
+        dc_bar_no: r.productCode || r.batchNo,
+        dc_prcode: r.prcode || 101,
+        dc_pgrcode: 1,
+        dc_qty: r.qty,
+        dc_rate: r.rateUnit,
+        dc_net_tot: r.amount,
+        dc_cgst_perc: r.cgstPerc,
+        dc_cgst_amnt: Number(((r.amount * r.cgstPerc) / 100).toFixed(2)),
+        dc_sgst_perc: r.sgstPerc,
+        dc_sgst_amnt: Number(((r.amount * r.sgstPerc) / 100).toFixed(2)),
+        dc_igst_perc: r.igstPerc || 0,
+        dc_igst_amnt: 0,
+        frm_code: company.frm_code,
+        prd_name: r.productName,
+      }));
+
+      if (childPayload.length > 0) {
+        await supabase.from("retail_sale_child").insert(childPayload);
+      }
+
+      // 3. Mark barcode records sold ('S') in bar_temp
       const barcodeList = gridRows.map((r) => r.productCode).filter(Boolean);
       if (barcodeList.length > 0) {
         await supabase
@@ -645,12 +743,15 @@ export default function RetailSalePOSPage() {
   const handleDeleteInvoice = async () => {
     if (!company?.frm_code) return;
 
-    if (mode !== "edit" || gridRows.length === 0) {
+    if (mode !== "edit" || currentIndex < 0 || !savedInvoices[currentIndex]) {
       alert("Delete is only available when viewing an existing saved POS invoice record.");
       return;
     }
 
-    if (!confirm(`Are you sure you want to delete POS Invoice ${invoiceNo}?`)) {
+    const currentInv = savedInvoices[currentIndex];
+    const delInvNo = currentInv.rm_bill_ref_no || invoiceNo;
+
+    if (!confirm(`Are you sure you want to delete POS Invoice ${delInvNo}?`)) {
       return;
     }
 
@@ -658,7 +759,7 @@ export default function RetailSalePOSPage() {
     try {
       const barcodeList = gridRows.map((r) => r.productCode).filter(Boolean);
       if (barcodeList.length > 0) {
-        // Return sold items back to Available stock ('A') without erasing original purchase inv_no if present
+        // Return sold items back to Available stock ('A')
         await supabase
           .from("bar_temp")
           .update({
@@ -668,7 +769,12 @@ export default function RetailSalePOSPage() {
           .eq("frm_code", company.frm_code);
       }
 
-      alert(`POS Invoice ${invoiceNo} deleted successfully and items returned to stock!`);
+      if (currentInv.rm_ref_no) {
+        await supabase.from("retail_sale_child").delete().eq("rm_ref_no", currentInv.rm_ref_no);
+        await supabase.from("retail_sale_mast").delete().eq("rm_ref_no", currentInv.rm_ref_no);
+      }
+
+      alert(`POS Invoice ${delInvNo} deleted successfully and items returned to stock!`);
       handleResetForm();
     } catch (e: any) {
       console.error("Delete error:", e);
@@ -748,18 +854,13 @@ export default function RetailSalePOSPage() {
               width: 76mm;
               margin: 0 auto;
               padding: 4mm 2mm;
-              color: #000;
-              background: #fff;
             }
             .text-center { text-align: center; }
             .text-right { text-align: right; }
             .bold { font-weight: bold; }
-            .title { font-size: 16px; font-weight: 900; letter-spacing: 0.5px; }
-            .border-top { border-top: 1px dashed #000; padding-top: 4px; margin-top: 4px; }
-            .border-bottom { border-bottom: 1px dashed #000; padding-bottom: 4px; margin-bottom: 4px; }
-            table { width: 100%; border-collapse: collapse; font-size: 10px; table-layout: fixed; }
-            th { border-bottom: 1px dashed #000; text-align: left; padding: 2px 0; font-weight: bold; }
-            td { padding: 2px 0; word-break: break-all; }
+            .border-top { border-top: 1px dashed #000; }
+            .border-bottom { border-bottom: 1px dashed #000; }
+            table { width: 100%; border-collapse: collapse; }
           </style>
         </head>
         <body>
@@ -877,54 +978,63 @@ export default function RetailSalePOSPage() {
     printWin.document.close();
   };
 
-  // Load Saved Invoice for Prev / Next Navigation - Fetches ALL items belonging to the selected invoice
-  const loadSavedInvoiceRecord = async (invNo: string) => {
-    if (!invNo || !company?.frm_code) return;
+  // Load Saved Invoice for Prev / Next Navigation and F3 Search
+  const loadSavedInvoiceRecord = async (invRecord: any) => {
+    if (!invRecord || !company?.frm_code) return;
     setLoading(true);
     try {
-      const { data: items, error } = await supabase
-        .from("bar_temp")
-        .select("*")
-        .eq("frm_code", company.frm_code)
-        .eq("inv_no", invNo)
-        .order("bar_ref_id", { ascending: true });
+      let invMast = invRecord;
+      let childItems = invMast.retail_sale_child;
 
-      if (error || !items || items.length === 0) {
-        alert(`No saved records found for invoice ${invNo}`);
-        return;
+      if (!childItems || childItems.length === 0) {
+        const { data: childData } = await supabase
+          .from("retail_sale_child")
+          .select("*")
+          .eq("rm_ref_no", invMast.rm_ref_no)
+          .order("dc_ref_no", { ascending: true });
+        childItems = childData || [];
       }
 
-      const loadedRows: POSGridRow[] = items.map((bar, idx) => {
-        const originalMrp = Number(bar.tag_rate || bar.pc_pur_rate || bar.pc_sale_rate || 2000);
-        const saleRate = Number(bar.pc_sale_rate || bar.tag_rate || 1500);
-        const prcodeStr = String(bar.prcode || 101);
+      const loadedRows: POSGridRow[] = (childItems || []).map((c: any, idx: number) => {
+        const prcodeStr = String(c.dc_prcode || 101);
         const taxInfo = productTaxMap.get(prcodeStr) || { gstPerc: 5, hsnCode: "50079010" };
-        const halfTax = (taxInfo.gstPerc || 5) / 2;
+        const halfTax = (c.dc_cgst_perc || taxInfo.gstPerc || 5) / 2;
 
         return {
-          id: `pos-saved-${bar.bar_no}-${idx}`,
+          id: `pos-saved-${c.dc_bar_no || idx}-${idx}`,
           sno: idx + 1,
-          productCode: bar.bar_no,
-          batchNo: bar.bar_no,
-          prcode: bar.prcode || 101,
-          productName: `${bar.grp_name || "Sarees"}-${taxInfo.hsnCode}`,
+          productCode: c.dc_bar_no || "",
+          batchNo: c.dc_bar_no || "",
+          prcode: c.dc_prcode || 101,
+          productName: c.prd_name || `Stock Item-${taxInfo.hsnCode}`,
           hsnCode: taxInfo.hsnCode,
-          qty: bar.qty || 1,
-          unitName: bar.unit_name || "Nos",
+          qty: c.dc_qty || 1,
+          unitName: "NOS",
           gross: 1,
-          mrp: originalMrp,
-          rateUnit: saleRate,
-          amount: (bar.qty || 1) * saleRate,
+          mrp: c.dc_rate || 2000,
+          rateUnit: c.dc_rate || 1500,
+          amount: c.dc_net_tot || ((c.dc_qty || 1) * (c.dc_rate || 0)),
           disPerc: 0,
-          sgstPerc: halfTax,
-          cgstPerc: halfTax,
-          igstPerc: 0,
+          sgstPerc: c.dc_sgst_perc || halfTax,
+          cgstPerc: c.dc_cgst_perc || halfTax,
+          igstPerc: c.dc_igst_perc || 0,
           isBatchItem: false,
-          maxStockQty: bar.qty || 1,
+          maxStockQty: c.dc_qty || 1,
         };
       });
 
-      setInvoiceNo(invNo);
+      setInvoiceNo(invMast.rm_bill_ref_no || `POS-${String(invMast.rm_ref_no).padStart(6, "0")}`);
+      setInvoiceDate(
+        invMast.rm_bill_date
+          ? new Date(invMast.rm_bill_date).toISOString().split("T")[0]
+          : new Date().toISOString().split("T")[0]
+      );
+      setCustomerName(invMast.cust_name || "Cash Customer");
+      setCustomerMobile(invMast.rm_ph_no || "");
+      setCustomerAddress(invMast.city || "");
+      setCustomerGstNo(invMast.gstin || "");
+      setCustomerState(invMast.state || "Tamil Nadu");
+      setCustomerStateCode(invMast.state_code || "33");
       setGridRows(loadedRows);
       setMode("edit");
     } catch (e: any) {
@@ -936,7 +1046,7 @@ export default function RetailSalePOSPage() {
 
   const handlePrevInvoice = () => {
     if (savedInvoices.length === 0) {
-      alert("No previous saved POS invoices found.");
+      alert("No saved Retail POS Sales invoices found.");
       return;
     }
     const newIdx = currentIndex <= 0 ? savedInvoices.length - 1 : currentIndex - 1;
@@ -946,7 +1056,7 @@ export default function RetailSalePOSPage() {
 
   const handleNextInvoice = () => {
     if (savedInvoices.length === 0) {
-      alert("No next saved POS invoices found.");
+      alert("No saved Retail POS Sales invoices found.");
       return;
     }
     const newIdx = currentIndex >= savedInvoices.length - 1 ? 0 : currentIndex + 1;
@@ -976,13 +1086,14 @@ export default function RetailSalePOSPage() {
     setTimeout(() => scanInputRef.current?.focus(), 100);
   };
 
-  // Keyboard Shortcuts Listener (Added F12 Print Shortcut)
+  // Keyboard Shortcuts Listener (F12 Print, F3 Invoice Search, F5 Stock Select)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         setIsStockModalOpen(false);
         setIsPaymentModalOpen(false);
         setIsCustomerModalOpen(false);
+        setIsInvoiceSearchModalOpen(false);
       } else if (e.key === "Insert") {
         e.preventDefault();
         scanInputRef.current?.focus();
@@ -991,11 +1102,12 @@ export default function RetailSalePOSPage() {
         if (mode === "edit") {
           handleOpenPaymentModal();
         } else {
-          alert("Edit mode is active when viewing a saved invoice record (via Prev/Next).");
+          alert("Edit mode is active when viewing a saved invoice record (via Prev/Next/Search).");
         }
       } else if (e.key === "F3") {
         e.preventDefault();
-        setIsStockModalOpen(true);
+        setSelectedInvoiceRowIndex(0);
+        setIsInvoiceSearchModalOpen(true);
       } else if (e.key === "F4") {
         e.preventDefault();
         handleResetForm();
@@ -1036,7 +1148,7 @@ export default function RetailSalePOSPage() {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [gridRows, totals.grandTotal, isPaymentModalOpen, isStockModalOpen, stockItems, selectedStockRowIndex, savedInvoices, currentIndex, mode]);
+  }, [gridRows, totals.grandTotal, isPaymentModalOpen, isStockModalOpen, isInvoiceSearchModalOpen, stockItems, selectedStockRowIndex, savedInvoices, currentIndex, mode]);
 
   return (
     <div className="min-h-screen bg-slate-200 dark:bg-slate-900 p-1.5 space-y-1.5 font-sans text-xs">
@@ -1112,8 +1224,8 @@ export default function RetailSalePOSPage() {
                 size="sm"
                 className="h-7 text-xs bg-slate-200 text-slate-800 border hover:bg-slate-300 font-bold px-3"
                 onClick={() => {
-                  setSelectedStockRowIndex(0);
-                  setIsStockModalOpen(true);
+                  setSelectedInvoiceRowIndex(0);
+                  setIsInvoiceSearchModalOpen(true);
                 }}
               >
                 Search [F3]
@@ -1518,6 +1630,142 @@ export default function RetailSalePOSPage() {
           </Button>
         </div>
       </div>
+
+      {/* RETAIL POS SALES INVOICE LOOKUP MODAL [F3] */}
+      <Dialog open={isInvoiceSearchModalOpen} onOpenChange={setIsInvoiceSearchModalOpen}>
+        <DialogContent className="max-w-5xl max-h-[85vh] p-0 border">
+          <div className="bg-lime-600 text-white px-3 py-2 font-bold text-xs flex justify-between items-center shadow-sm">
+            <span className="text-sm font-bold flex items-center gap-2">
+              <span>🔍</span> Search Retail POS Sales Invoices [F3]
+            </span>
+            <span className="text-xs bg-lime-700/80 px-2 py-0.5 rounded font-mono">
+              {filteredInvoices.length} Invoices Found
+            </span>
+          </div>
+
+          <div className="p-3 space-y-2">
+            <Input
+              value={invoiceSearchTerm}
+              onChange={(e) => {
+                setInvoiceSearchTerm(e.target.value);
+                setSelectedInvoiceRowIndex(0);
+              }}
+              placeholder="Search by Invoice No (e.g. POS-000001), Customer Name, Phone, Date..."
+              className="h-8 text-xs bg-background font-medium"
+              autoFocus
+            />
+
+            <div className="overflow-y-auto max-h-[380px] border rounded">
+              <Table className="w-full text-xs border-collapse font-mono">
+                <TableHeader className="bg-slate-100 dark:bg-slate-800 font-bold sticky top-0 border-b">
+                  <TableRow>
+                    <TableHead className="w-10 text-center p-1 font-bold">SNo</TableHead>
+                    <TableHead className="w-28 p-1 font-bold">Invoice No</TableHead>
+                    <TableHead className="w-24 text-center p-1 font-bold">Date</TableHead>
+                    <TableHead className="p-1 font-bold min-w-[160px]">Customer Name</TableHead>
+                    <TableHead className="w-28 p-1 font-bold">Phone</TableHead>
+                    <TableHead className="w-16 text-right p-1 font-bold">Qty</TableHead>
+                    <TableHead className="w-24 text-right p-1 font-bold">Taxable Amt</TableHead>
+                    <TableHead className="w-20 text-right p-1 font-bold">Tax</TableHead>
+                    <TableHead className="w-24 text-right p-1 font-bold text-emerald-700 dark:text-emerald-400">Net Amount</TableHead>
+                    <TableHead className="w-20 text-center p-1 font-bold">Pay Mode</TableHead>
+                  </TableRow>
+                </TableHeader>
+
+                <TableBody className="text-xs">
+                  {filteredInvoices.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={10} className="text-center py-8 text-muted-foreground">
+                        No Retail POS Sales invoices found.
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    filteredInvoices.map((inv, idx) => {
+                      const isSelected = selectedInvoiceRowIndex === idx;
+                      const invDateFormatted = inv.rm_bill_date
+                        ? new Date(inv.rm_bill_date).toISOString().split("T")[0]
+                        : "-";
+                      const totTax = (inv.rm_cgst_amt || 0) + (inv.rm_sgst_amt || 0) + (inv.rm_igst_amt || 0);
+
+                      return (
+                        <TableRow
+                          key={inv.rm_ref_no || idx}
+                          ref={(el) => {
+                            invoiceRowRefs.current[idx] = el;
+                          }}
+                          className={`cursor-pointer transition-colors ${
+                            isSelected
+                              ? "bg-lime-100 dark:bg-lime-950/60 text-slate-950 dark:text-lime-100 font-bold border-2 border-lime-500"
+                              : "hover:bg-muted/50"
+                          }`}
+                          onClick={() => setSelectedInvoiceRowIndex(idx)}
+                          onDoubleClick={() => {
+                            const originalIdx = savedInvoices.findIndex(
+                              (s) => s.rm_ref_no === inv.rm_ref_no
+                            );
+                            setCurrentIndex(originalIdx >= 0 ? originalIdx : 0);
+                            loadSavedInvoiceRecord(inv);
+                            setIsInvoiceSearchModalOpen(false);
+                          }}
+                        >
+                          <TableCell className="text-center p-1">{idx + 1}</TableCell>
+                          <TableCell className="p-1 font-bold text-lime-700 dark:text-lime-400">
+                            {inv.rm_bill_ref_no || `POS-${inv.rm_ref_no}`}
+                          </TableCell>
+                          <TableCell className="text-center p-1">{invDateFormatted}</TableCell>
+                          <TableCell className="p-1 font-semibold">{inv.cust_name || "Cash Customer"}</TableCell>
+                          <TableCell className="p-1">{inv.rm_ph_no || "-"}</TableCell>
+                          <TableCell className="text-right p-1 font-bold">{(inv.rm_tot_qty || 1).toFixed(2)}</TableCell>
+                          <TableCell className="text-right p-1">₹{(inv.rm_bf_gst_amt || 0).toFixed(2)}</TableCell>
+                          <TableCell className="text-right p-1">₹{totTax.toFixed(2)}</TableCell>
+                          <TableCell className="text-right font-bold text-emerald-700 dark:text-emerald-400 p-1">
+                            ₹{(inv.rm_net_total || 0).toFixed(2)}
+                          </TableCell>
+                          <TableCell className="text-center p-1 font-bold">{inv.rm_mode_one || "CASH"}</TableCell>
+                        </TableRow>
+                      );
+                    })
+                  )}
+                </TableBody>
+              </Table>
+            </div>
+          </div>
+
+          <div className="bg-slate-100 dark:bg-slate-800 p-2 border-t flex justify-between items-center text-xs font-mono font-bold">
+            <span className="text-[11px] text-muted-foreground">
+              (Use Up/Down Arrow keys to navigate, Double-click or Press Enter to load invoice)
+            </span>
+
+            <div className="flex gap-2">
+              <Button
+                size="sm"
+                className="h-7 text-xs bg-lime-600 hover:bg-lime-700 text-white font-bold px-4 shadow"
+                onClick={() => {
+                  if (filteredInvoices[selectedInvoiceRowIndex]) {
+                    const selected = filteredInvoices[selectedInvoiceRowIndex];
+                    const originalIdx = savedInvoices.findIndex(
+                      (s) => s.rm_ref_no === selected.rm_ref_no
+                    );
+                    setCurrentIndex(originalIdx >= 0 ? originalIdx : 0);
+                    loadSavedInvoiceRecord(selected);
+                    setIsInvoiceSearchModalOpen(false);
+                  }
+                }}
+              >
+                Load Invoice [Enter]
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 text-xs text-red-600 font-bold px-4"
+                onClick={() => setIsInvoiceSearchModalOpen(false)}
+              >
+                Cancel [Esc]
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* STOCK SELECTION POPUP MODAL */}
       <Dialog open={isStockModalOpen} onOpenChange={setIsStockModalOpen}>
