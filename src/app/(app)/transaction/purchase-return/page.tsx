@@ -235,7 +235,7 @@ export default function PurchaseReturnPage() {
           const invMap = new Map<string, SupplierInvoiceItem[]>();
 
           availableBarRows.forEach((bar: any) => {
-            const invNo = bar.inv_no || "PI-1025";
+            const invNo = bar.inv_no || "PUR-INV";
             const invDate = bar.inv_date
               ? new Date(bar.inv_date).toLocaleDateString("en-IN")
               : new Date().toLocaleDateString("en-IN");
@@ -285,91 +285,12 @@ export default function PurchaseReturnPage() {
               };
             }
           );
-          setInvoices(invoiceList);
         } else {
-          // Provide realistic stock invoices for vendor testing
-          const demoInvoices: SupplierInvoice[] = [
-            {
-              invoiceNo: "PI-1025",
-              invoiceDate: "10-08-2026",
-              purchaseValue: 25000,
-              balanceStockQty: 15,
-              itemCount: 3,
-              selected: false,
-              expanded: true,
-              items: [
-                {
-                  prcode: 101,
-                  prname: `${suppName} - Silk Saree Type A`,
-                  hsnCode: "62099090",
-                  invoiceNo: "PI-1025",
-                  invoiceDate: "10-08-2026",
-                  barcodeNo: "KS01620",
-                  batchNo: "BATCH-250",
-                  availableQty: 6,
-                  returnQty: 1,
-                  unit: "NOS",
-                  purRate: 2850,
-                  disPerc: 0,
-                  discAmt: 0,
-                  expenses: 0,
-                  gstPerc: 5,
-                  selected: true,
-                },
-                {
-                  prcode: 102,
-                  prname: `${suppName} - Fancy Dhothies Set`,
-                  hsnCode: "52082110",
-                  invoiceNo: "PI-1025",
-                  invoiceDate: "10-08-2026",
-                  barcodeNo: "KS01613",
-                  batchNo: "BATCH-251",
-                  availableQty: 5,
-                  returnQty: 1,
-                  unit: "NOS",
-                  purRate: 4150,
-                  disPerc: 0,
-                  discAmt: 0,
-                  expenses: 0,
-                  gstPerc: 5,
-                  selected: true,
-                },
-              ],
-            },
-            {
-              invoiceNo: "PI-1040",
-              invoiceDate: "15-08-2026",
-              purchaseValue: 18500,
-              balanceStockQty: 8,
-              itemCount: 2,
-              selected: false,
-              expanded: false,
-              items: [
-                {
-                  prcode: 104,
-                  prname: `${suppName} - Kanchipuram Border Saree`,
-                  hsnCode: "62099090",
-                  invoiceNo: "PI-1040",
-                  invoiceDate: "15-08-2026",
-                  barcodeNo: "KS01615",
-                  batchNo: "BATCH-301",
-                  availableQty: 5,
-                  returnQty: 1,
-                  unit: "NOS",
-                  purRate: 7485,
-                  disPerc: 0,
-                  discAmt: 0,
-                  expenses: 0,
-                  gstPerc: 5,
-                  selected: true,
-                },
-              ],
-            },
-          ];
-          setInvoices(demoInvoices);
+          setInvoices([]);
         }
       } catch (e) {
         console.error("Error loading supplier invoices:", e);
+        setInvoices([]);
       }
     },
     [company?.frm_code, supabase]
@@ -541,10 +462,10 @@ export default function PurchaseReturnPage() {
           return;
         }
 
-        const invNo = bar.inv_no || "PI-1025";
+        const invNo = bar.inv_no || "PUR-INV";
         const invDate = bar.inv_date
           ? new Date(bar.inv_date).toLocaleDateString("en-IN")
-          : "10-08-2026";
+          : new Date().toLocaleDateString("en-IN");
 
         const newRow: ReturnGridRow = {
           id: `row-${Date.now()}`,
@@ -716,12 +637,12 @@ export default function PurchaseReturnPage() {
           id: `row-edit-${c.prc_prcode || i}`,
           sno: i + 1,
           prcode: c.prc_prcode,
-          prname: "Silk Saree Item / Dhothies Set",
-          hsnCode: "62099090",
-          invoiceNo: "PI-1025",
-          invoiceDate: "10-08-2026",
-          barcodeNo: "KS01620",
-          batchNo: "BATCH-250",
+          prname: c.pc_prname || "Purchased Product Item",
+          hsnCode: c.pc_hsn_code || "62099090",
+          invoiceNo: record.prm_bill_ref_no || "PUR-RET",
+          invoiceDate: record.prm_bill_date ? new Date(record.prm_bill_date).toLocaleDateString("en-IN") : new Date().toLocaleDateString("en-IN"),
+          barcodeNo: `BAR-${c.prc_prcode || i+1}`,
+          batchNo: `BATCH-${c.prc_prcode || i+1}`,
           qty: c.prc_qty,
           maxBalanceQty: 999,
           unit: "NOS",
